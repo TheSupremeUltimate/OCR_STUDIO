@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCR Studio</title>
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='url(%23grad)'/><defs><linearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300d4aa'/><stop offset='100%25' stop-color='%230ea5e9'/></linearGradient></defs><text x='16' y='22' font-family='sans-serif' font-weight='900' font-size='18' fill='%230a0e1a' text-anchor='middle'>O</text></svg>">
+  <!-- Google Fonts Link for Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="css/index.css">
+</head>
+<body>
+
+  <!-- App Header -->
+  <header class="app-header glass-panel">
+    <div class="logo-area">
+      <div class="logo-icon">O</div>
+      <span class="logo-title"><span class="logo-title-ocr">OCR</span> <span class="logo-title-studio">Studio</span></span>
+    </div>
+    <div class="header-controls">
+      <div class="status-indicator">
+        <span class="status-dot online pulse" id="status-dot"></span>
+        <span class="status-text" id="status-text">LM Studio: Connected</span>
+      </div>
+      <button class="icon-btn" id="btn-settings" title="Settings">
+        <!-- Settings Gear SVG Icon -->
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.43l-1.003.828c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.43l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container for Dynamic Views -->
+  <main class="main-container">
+
+    <!-- View A: Dashboard & Upload (Active by default) -->
+    <section id="view-dashboard" class="view is-active">
+      <header class="view-header">
+        <h2>Dashboard</h2>
+        <p class="subtitle">Drag & drop your PDF file to extract clean, structured Markdown.</p>
+      </header>
+      
+      <div class="dashboard-grid">
+        <!-- Drag & Drop Zone -->
+        <div class="drop-zone glass-panel" id="drop-zone">
+          <i class="upload-icon">📄</i>
+          <h3>Drag & Drop PDF here</h3>
+          <p>or click to browse from your computer</p>
+          <button class="btn btn--primary" id="btn-browse">Browse Files</button>
+          <input type="file" id="file-input" accept=".pdf" multiple hidden>
+        </div>
+
+        <!-- Recent Jobs Side Panel -->
+        <aside class="recent-jobs glass-panel">
+          <h3>
+            <span>Recent Jobs</span>
+            <button class="icon-btn" id="btn-clear-history" title="Clear History" style="padding: 0.25rem;">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width:16px; height:16px;">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+              </svg>
+            </button>
+          </h3>
+          <ul class="recent-jobs-list" id="recent-jobs-list">
+            <!-- Job 1 -->
+            <li class="job-item">
+              <div class="job-info">
+                <span class="job-name" title="the-complete-i-ching.pdf">the-complete-i-ching.pdf</span>
+                <span class="job-meta">247 pages &bull; 2 hours ago</span>
+              </div>
+              <span class="job-status-badge badge--success">Completed</span>
+            </li>
+            <!-- Job 2 -->
+            <li class="job-item">
+              <div class="job-info">
+                <span class="job-name" title="legge_Iching.pdf">legge_Iching.pdf</span>
+                <span class="job-meta">420 pages &bull; 1 day ago</span>
+              </div>
+              <span class="job-status-badge badge--success">Completed</span>
+            </li>
+            <!-- Job 3 -->
+            <li class="job-item">
+              <div class="job-info">
+                <span class="job-name" title="failed_scan_test.pdf">failed_scan_test.pdf</span>
+                <span class="job-meta">12 pages &bull; 2 days ago</span>
+              </div>
+              <span class="job-status-badge badge--error">Failed</span>
+            </li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+
+    <!-- View B: Settings Modal/Drawer (Hidden by default) -->
+    <div id="modal-settings" class="modal is-hidden">
+      <div class="modal-content glass-panel">
+        <h2>Settings</h2>
+        <form id="form-settings" onsubmit="return false;">
+          <div class="form-group">
+            <label for="input-server">LM Studio Server URL</label>
+            <input type="text" id="input-server" class="form-control" value="http://192.168.20.50:1234/v1">
+          </div>
+          <div class="form-group">
+            <label for="select-model">Model Name</label>
+            <select id="select-model" class="form-control">
+              <option value="" disabled selected>Loading models...</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="input-workers">Workers</label>
+              <input type="number" id="input-workers" class="form-control" value="4" min="1" max="16">
+            </div>
+            <div class="form-group">
+              <label for="input-pages-group">Pages per Group</label>
+              <input type="number" id="input-pages-group" class="form-control" value="20" min="1">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="select-img-dim">Target Image Dimension</label>
+            <select id="select-img-dim" class="form-control">
+              <option value="1024" selected>1024 px (Default)</option>
+              <option value="768">768 px</option>
+              <option value="1536">1536 px</option>
+              <option value="2048">2048 px</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="input-output-dir">Output Directory</label>
+            <input type="text" id="input-output-dir" class="form-control" placeholder="Default: PROJECT_ROOT/output">
+          </div>
+          <div class="form-group">
+            <label for="input-page-range">Page Range (Optional)</label>
+            <input type="text" id="input-page-range" class="form-control" placeholder="e.g., 1-5, 8, 11-13">
+          </div>
+          <div class="modal-actions" style="justify-content: space-between; display: flex;">
+            <button type="button" class="btn btn--secondary" id="btn-open-logs">Open Logs</button>
+            <div>
+              <button type="button" class="btn btn--secondary" id="btn-settings-cancel">Cancel</button>
+              <button type="submit" class="btn btn--primary" id="btn-settings-save">Save Settings</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- View C: Processing View (Hidden by default) -->
+    <section id="view-processing" class="view is-hidden">
+      <header class="view-header">
+        <h2>Processing Document</h2>
+        <p class="subtitle" id="processing-file-label">Analyzing: the-complete-i-ching.pdf</p>
+        <p class="subtitle" id="processing-paths-label" style="font-size: 0.85rem; opacity: 0.75; margin-top: 0.25rem;">Input: - | Output: -</p>
+      </header>
+
+      <!-- Progress Panel -->
+      <div class="processing-status glass-panel">
+        <div class="processing-header-info">
+          <span id="txt-progress-status" style="font-weight: 500;">Processing page 4 of 12...</span>
+          <span class="etr-text" id="txt-etr">Estimated Time Remaining: 02m 45s</span>
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="bar-progress-fill" style="width: 33%;"></div>
+        </div>
+      </div>
+
+      <!-- CSS Grid of Page Cards -->
+      <div class="pages-grid" id="pages-grid">
+        <!-- Placeholder Page Cards -->
+        <div class="page-card state-done glass-panel">
+          <span class="page-num">1</span>
+          <span class="page-status-text">Done</span>
+        </div>
+        <div class="page-card state-done glass-panel">
+          <span class="page-num">2</span>
+          <span class="page-status-text">Done</span>
+        </div>
+        <div class="page-card state-done glass-panel">
+          <span class="page-num">3</span>
+          <span class="page-status-text">Done</span>
+        </div>
+        <div class="page-card state-processing glass-panel">
+          <span class="page-num">4</span>
+          <span class="page-status-text">Processing</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">5</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">6</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">7</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-error glass-panel">
+          <span class="page-num">8</span>
+          <span class="page-status-text">Error</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">9</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">10</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">11</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+        <div class="page-card state-pending glass-panel">
+          <span class="page-num">12</span>
+          <span class="page-status-text">Pending</span>
+        </div>
+      </div>
+
+      <!-- Scrollable Live Terminal Log -->
+      <div class="terminal-window" id="terminal-log">
+        <div class="terminal-line info">2026-07-02 23:30:52 - ocr_studio.engine - INFO - Split PDF into 12 single-page tasks</div>
+        <div class="terminal-line info">2026-07-02 23:30:53 - ocr_studio.engine - INFO - Initiated page workers pool: size=4</div>
+        <div class="terminal-line success">2026-07-02 23:31:02 - ocr_studio.engine - INFO - Completed Page 1/12 successfully [Cached]</div>
+        <div class="terminal-line success">2026-07-02 23:31:05 - ocr_studio.engine - INFO - Completed Page 2/12 successfully [Cached]</div>
+        <div class="terminal-line success">2026-07-02 23:31:09 - ocr_studio.engine - INFO - Completed Page 3/12 successfully</div>
+        <div class="terminal-line info">2026-07-02 23:31:10 - ocr_studio.engine - INFO - Requesting generation for Page 4 (Token count: 2048)</div>
+        <div class="terminal-line warning">2026-07-02 23:31:12 - ocr_studio.engine - WARNING - Retrying generation for Page 8 due to timeout (Attempt 1/3)</div>
+        <div class="terminal-line error">2026-07-02 23:31:14 - ocr_studio.engine - ERROR - Page 8 failed after 3 attempts: Connection refused by LM Studio</div>
+      </div>
+
+      <!-- Cancel Action -->
+      <div class="processing-actions">
+        <button class="btn btn--danger" id="btn-cancel-processing">Cancel Job</button>
+      </div>
+    </section>
+
+    <!-- View D: Results View (Hidden by default) -->
+    <section id="view-results" class="view is-hidden">
+      <div class="results-container">
+        <!-- Success Header -->
+        <div class="results-header-panel glass-panel">
+          <div class="success-icon-badge">✓</div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.5rem;">OCR Job Complete</h2>
+            <p class="subtitle" style="margin: 0;" id="result-status-label">Successfully generated markdown for the-complete-i-ching.pdf</p>
+          </div>
+        </div>
+
+        <!-- Results Split Grid -->
+        <div class="results-split-grid">
+          <!-- Left Column: PDF Page Preview -->
+          <div class="pdf-preview-pane glass-panel">
+            <h3>PDF Page Preview</h3>
+            <div class="pdf-image-container">
+              <img id="preview-page-img" src="" alt="PDF page preview" onerror="this.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; document.getElementById('preview-error-overlay').classList.remove('is-hidden');">
+              <div id="preview-error-overlay" class="preview-overlay is-hidden">
+                <i class="overlay-icon">⚠️</i>
+                <p class="overlay-text">Preview Unavailable</p>
+                <span class="overlay-sub">Original PDF is missing or unreadable</span>
+              </div>
+            </div>
+            <div class="pdf-preview-nav">
+              <button class="btn btn--secondary btn--sm" id="btn-preview-prev">◀ Prev</button>
+              <span id="txt-preview-page-label" class="preview-page-label">Page 1 of 1</span>
+              <span id="preview-confidence-badge" class="confidence-badge badge--unknown">N/A</span>
+              <button class="btn btn--secondary btn--sm" id="btn-preview-next">Next ▶</button>
+            </div>
+          </div>
+
+          <!-- Right Column: Markdown Preview Pane -->
+          <div class="markdown-preview-pane glass-panel">
+            <h3>Markdown Preview</h3>
+            <textarea readonly id="txt-markdown-preview"></textarea>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="results-action-bar">
+          <button class="btn btn--secondary" id="btn-results-copy">Copy to Clipboard</button>
+          <button class="btn btn--primary" id="btn-results-download">Download Full Markdown</button>
+          <button class="btn btn--secondary" id="btn-results-download-word">Download Word (.docx)</button>
+          <button class="btn btn--secondary" id="btn-results-download-html">Download HTML</button>
+          <button class="btn btn--secondary" id="btn-results-new">Start New Job</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Main Controller script -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
