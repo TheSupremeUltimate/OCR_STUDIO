@@ -1,10 +1,11 @@
 import logging
 from pathlib import Path
+import re
 import markdown
 
 logger = logging.getLogger("ocr_studio.export_utils")
 
-# Styling boilerplate for HTML export
+# Styling boilerplate for HTML export (Includes custom page break layouts)
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -43,8 +44,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     code {{
       font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
       font-size: 85%;
-      background-color: rgba(27,31,35,0.05);
-      padding: 0.2em 0.4em;
+      background-color: rgba(27,31,35,0.05);       padding: 0.2em 0.4em;
       border-radius: 3px;
     }}
     pre {{
@@ -81,6 +81,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       font-weight: 600;
       background-color: #f2f2f2;
     }}
+    /* Aesthetic structural page breaks */
+    .html-page-divider {{
+      display: flex;
+      align-items: center;
+      margin: 50px 0 30px 0;
+      color: #0ea5e9;
+      font-weight: 700;
+      font-size: 0.8rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      user-select: none;
+      page-break-before: always; /* Forces hard page split when printing or saving to PDF */
+    }}
+    .html-page-divider::after {{
+      content: "";
+      flex: 1;
+      margin-left: 20px;
+      border-bottom: 2px dashed #eaecef;
+    }}
   </style>
 </head>
 <body>
@@ -92,11 +111,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 def convert_markdown_to_html(md_path: Path, html_path: Path) -> bool:
-    """Convert Markdown file to a styled HTML document."""
+    """Convert Markdown file to a styled HTML document with paragraph and page-break support."""
     try:
         md_text = md_path.read_text(encoding="utf-8")
-        # Enable tables, fenced code blocks, and other common extensions
-        body_html = markdown.markdown(md_text, extensions=['tables', 'fenced_code'])
+        
+        # Pre-process: Intercept hidden page comments and convert them into structural HTML layout markers
+        md_text = re.sub(
+            r'<!--\s*PAGE\s+(\d+)\s*-->', 
+            r'<div class="html-page-divider">Page \1</div>', 
+            md_text
+        )
+        
+        # Added 'nl2br' extension to translate single model line returns into structural line breaks natively
+        body_html = markdown.markdown(md_text, extensions=['tables', 'fenced_code', 'nl2br'])
+        
         full_html = HTML_TEMPLATE.format(body=body_html)
         html_path.write_text(full_html, encoding="utf-8")
         logger.info("Successfully converted %s to HTML -> %s", md_path.name, html_path.name)
@@ -109,19 +137,16 @@ def convert_markdown_to_docx(md_path: Path, docx_path: Path) -> bool:
     """Convert Markdown file to a DOCX document using pypandoc."""
     try:
         import os
-        # Avoid urllib authorization header 401 errors caused by dummy tokens in environment
         os.environ.pop("GITHUB_TOKEN", None)
-        
         import pypandoc
         
-        # Ensure pandoc is downloaded (zero-config Windows setup)
         try:
             pypandoc.get_pandoc_path()
         except OSError:
             logger.info("Pandoc not found. Initiating automatic download...")
             pypandoc.download_pandoc()
             logger.info("Pandoc download completed successfully.")
-
+            
         pypandoc.convert_file(
             source_file=str(md_path),
             to='docx',
