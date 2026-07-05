@@ -32,6 +32,7 @@ from backend.config import (
     get_upload_dir,
 )
 from backend.job_manager import JobManager
+from backend.ocr_engine import process_cropped_zone
 from backend.models import (
     JobCreateRequest,
     JobResponse,
@@ -39,6 +40,8 @@ from backend.models import (
     SettingsResponse,
     SettingsUpdateRequest,
     UploadResponse,
+    ZoneReprocessRequest,
+    TranslateRequest,
 )
 
 # ---------------------------------------------------------------------------
@@ -377,6 +380,143 @@ async def download_file(filename: str, fmt: Optional[str] = None):
     )
 
 
+@app.put("/api/download/{filename}")
+async def save_edited_file(filename: str, payload: dict):
+    """Save edited Markdown text back to the output directory."""
+    file_path = get_output_dir() / filename
+    if not file_path.parent.exists():
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    content = payload.get("content", "")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    
+    # Invalidate converted formats cache
+    for suffix in (".html", ".docx"):
+        export_path = file_path.with_suffix(suffix)
+        if export_path.exists():
+            try:
+                os.remove(export_path)
+            except Exception:
+                pass
+    return {"detail": "File saved successfully."}
+
+
+@app.post("/api/jobs/reprocess-zone")
+async def reprocess_zone(req: ZoneReprocessRequest):
+    """Re-run OCR processing on a specific cropped zone of a page."""
+    job = job_manager.get_job(req.job_id)
+    if not job:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Job not found: {req.job_id}"},
+        )
+
+    pdf_path = get_upload_dir() / job.pdf_filename
+    if not pdf_path.exists():
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Source PDF file not found: {job.pdf_filename}"},
+        )
+
+    settings = load_settings()
+
+    try:
+        page_result = await process_cropped_zone(
+            pdf_path=str(pdf_path),
+            page_num=req.page_num,
+            x=req.x,
+            y=req.y,
+            width=req.width,
+            height=req.height,
+            settings=settings,
+        )
+
+        if not page_result.success:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"OCR failed for cropped zone: {page_result.error_message}"},
+            )
+
+        # Update in-memory job status with corrected page confidence if logprobs available
+        if page_result.confidence_score is not None:
+            job.page_confidence[str(req.page_num)] = page_result.confidence_score
+        if page_result.token_logprobs is not None:
+            job.page_token_logprobs[str(req.page_num)] = page_result.token_logprobs
+
+        # Return the new OCR text, confidence and logprobs
+        return {
+            "page_num": req.page_num,
+            "natural_text": page_result.response.natural_text,
+            "confidence_score": page_result.confidence_score,
+            "token_logprobs": page_result.token_logprobs,
+        }
+    except Exception as e:
+        logger.exception("Failed to re-process zone")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error reprocessing zone: {str(e)}"},
+        )
+
+@app.post("/api/jobs/translate")
+async def translate_document(req: TranslateRequest):
+    """Translate classical Chinese text to English using LM Studio."""
+    settings = load_settings()
+    server_url = settings.get("server_url", "http://localhost:1234/v1")
+    
+    # Priority: Translation Model -> Fallback to OCR Model
+    model = settings.get("translation_model")
+    if not model:
+        model = settings.get("model", "")
+    
+    completion_url = f"{server_url.rstrip('/')}/chat/completions"
+    system_prompt = (
+        "You are an expert translator specializing in translating Classical Chinese philosophical, historical, and archival texts into natural English. "
+        "Your task is to translate the provided Classical Chinese markdown content into clear, academic English.\n\n"
+        "Rules:\n"
+        "1. Return ONLY the English translation.\n"
+        "2. Do NOT output any explanations, prefaces, or original Chinese characters in the translation.\n"
+        "3. Preserve all markdown tags, line breaks, and metadata comments (like <!-- PAGE 001 -->).\n\n"
+        "Examples:\n"
+        "Input: 剛柔者立本者也變通者趣時者也\n"
+        "Output: Hardness and softness are the established foundation; change and continuity are the adaptation to time.\n\n"
+        "Input: 吉凶者貞勝者也\n"
+        "Output: Good fortune and misfortune are determined by perseverance."
+    )
+    
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Please translate this content now:\n\n{req.content}"}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 4096
+    }
+    
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            res = await client.post(completion_url, json=payload)
+            if res.status_code != 200:
+                logger.error("LM Studio translation endpoint returned error status: %d - %s", res.status_code, res.text)
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": f"LM Studio returned error status: {res.status_code}"}
+                )
+            
+            data = res.json()
+            translated_text = data["choices"][0]["message"]["content"]
+            return {"translated_text": translated_text}
+            
+    except Exception as e:
+        logger.exception("Failed to translate markdown content")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Translation failed: {str(e)}"}
+        )
+
+
 @app.get("/api/pdf/{filename}/page/{page_number}/image")
 async def get_pdf_page_image(filename: str, page_number: int):
     """Render a specific PDF page to JPEG and return it."""
@@ -411,9 +551,9 @@ async def get_pdf_page_image(filename: str, page_number: int):
         page = doc[page_number - 1]
         
         # Render page to bitmap. 
-        # Calculate scale to target ~1200px longest dimension for sharp display
+        # Calculate scale to target ~2400px longest dimension for sharp display when zooming
         width, height = page.get_size()
-        scale = 1200 / max(width, height)
+        scale = 2400 / max(width, height)
         
         bitmap = page.render(
             scale=scale,

@@ -181,7 +181,7 @@ class JobManager:
             # Define the progress callback
             page_starts = {}
 
-            async def on_progress(page_num: int, total_pages: int, event: str, message: str, eta: Optional[float] = None, confidence: Optional[float] = None):
+            async def on_progress(page_num: int, total_pages: int, event: str, message: str, eta: Optional[float] = None, confidence: Optional[float] = None, token_logprobs: Optional[list] = None):
                 done = job.pages_completed + job.pages_failed
                 
                 if event == "page_start":
@@ -191,6 +191,8 @@ class JobManager:
                     done = job.pages_completed + job.pages_failed
                     if confidence is not None:
                         job.page_confidence[str(page_num)] = confidence
+                    if token_logprobs is not None:
+                        job.page_token_logprobs[str(page_num)] = token_logprobs
                     if page_num in page_starts:
                         duration = time.time() - page_starts.pop(page_num)
                         self._global_page_times.append(duration)
@@ -231,6 +233,7 @@ class JobManager:
                     message=message,
                     eta_seconds=calculated_eta,
                     confidence=confidence,
+                    token_logprobs=token_logprobs,
                 ))
 
             # Run the OCR engine
@@ -242,6 +245,9 @@ class JobManager:
             job.output_filename = result["output_filename"]
             job.progress_percent = 100.0
             job.completed_at = datetime.datetime.now().isoformat(timespec="seconds")
+            job.total_runtime = result.get("duration_seconds")
+            job.average_confidence = result.get("average_confidence")
+            job.total_retries = result.get("total_retries", 0)
 
             await self._broadcast(ProgressMessage(
                 job_id=job_id,
@@ -251,6 +257,9 @@ class JobManager:
                 pages_failed=job.pages_failed,
                 progress_percent=100.0,
                 message=f"Complete: {result['pages_completed']}/{result['total_pages']} pages ({result['duration_seconds']}s)",
+                total_runtime=job.total_runtime,
+                average_confidence=job.average_confidence,
+                total_retries=job.total_retries,
             ))
 
             logger.info("Job %s completed: %s", job_id, result["output_filename"])

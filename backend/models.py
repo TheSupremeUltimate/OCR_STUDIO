@@ -5,7 +5,7 @@ Request/response schemas for the FastAPI endpoints.
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel, Field
 
@@ -33,18 +33,45 @@ class JobCreateRequest(BaseModel):
     target_longest_image_dim: Optional[int] = Field(None, ge=256, le=4096, description="Target longest image dimension in pixels")
     max_page_retries: Optional[int] = Field(None, ge=0, le=10, description="Max retries per page")
     page_range: Optional[str] = Field(None, description="Page range to process (e.g. '1-5, 8')")
+    custom_glossary: Optional[str] = Field(None, description="Custom glossary for document-specific terminology")
+    strict_mode: Optional[bool] = Field(None, description="Enable strict archival mode (exact 1:1 transcription)")
+    reading_direction: Optional[str] = Field(None, description="Reading direction override (Default, Vertical RTL, Horizontal LTR)")
+    document_structure: Optional[str] = Field("Standard", description="Document structure classification (Standard, Main Text + Interline Commentary)")
+    binarize: Optional[bool] = Field(None, description="Enable binarization filter (B/W)")
+    high_contrast: Optional[bool] = Field(None, description="Enable high contrast filter")
+    despeckle: Optional[bool] = Field(None, description="Enable despeckle (median filter)")
+    consensus_mode: Optional[bool] = Field(None, description="Enable consensus voting mode (768px, 1024px, 2048px)")
 
 
 class SettingsUpdateRequest(BaseModel):
     """Request to update application settings."""
     server_url: Optional[str] = None
     model: Optional[str] = None
+    translation_model: Optional[str] = None
     workers: Optional[int] = Field(None, ge=1, le=8)
     pages_per_group: Optional[int] = Field(None, ge=1, le=50)
     target_longest_image_dim: Optional[int] = Field(None, ge=256, le=4096)
     max_page_retries: Optional[int] = Field(None, ge=0, le=10)
     output_dir: Optional[str] = None
     page_range: Optional[str] = None
+    custom_glossary: Optional[str] = None
+    strict_mode: Optional[bool] = None
+    reading_direction: Optional[str] = None
+    document_structure: Optional[str] = None
+    binarize: Optional[bool] = None
+    high_contrast: Optional[bool] = None
+    despeckle: Optional[bool] = None
+    consensus_mode: Optional[bool] = None
+
+
+class ZoneReprocessRequest(BaseModel):
+    """Request to re-run OCR on a specific cropped zone of a page."""
+    job_id: str = Field(..., description="ID of the active or completed job")
+    page_num: int = Field(..., description="1-indexed page number to reprocess")
+    x: float = Field(..., description="Normalized x coordinate (0.0 to 1.0)")
+    y: float = Field(..., description="Normalized y coordinate (0.0 to 1.0)")
+    width: float = Field(..., description="Normalized width (0.0 to 1.0)")
+    height: float = Field(..., description="Normalized height (0.0 to 1.0)")
 
 
 # ---------------------------------------------------------------------------
@@ -73,12 +100,17 @@ class JobResponse(BaseModel):
     created_at: str = ""
     completed_at: Optional[str] = None
     page_confidence: dict[str, Optional[float]] = Field(default_factory=dict)
+    page_token_logprobs: dict[str, Optional[list[dict]]] = Field(default_factory=dict)
+    total_runtime: Optional[float] = None
+    average_confidence: Optional[float] = None
+    total_retries: int = 0
 
 
 class SettingsResponse(BaseModel):
     """Response containing current application settings."""
     server_url: str
     model: str
+    translation_model: Optional[str] = None
     workers: int
     pages_per_group: int
     target_longest_image_dim: int
@@ -86,6 +118,14 @@ class SettingsResponse(BaseModel):
     max_tokens: int
     output_dir: str
     page_range: str
+    custom_glossary: str
+    strict_mode: bool
+    reading_direction: str
+    document_structure: str
+    binarize: bool
+    high_contrast: bool
+    despeckle: bool
+    consensus_mode: bool = False
 
 
 class ServerHealthResponse(BaseModel):
@@ -112,3 +152,14 @@ class ProgressMessage(BaseModel):
     message: str = ""
     eta_seconds: Optional[float] = None
     confidence: Optional[float] = None
+    total_runtime: Optional[float] = None
+    average_confidence: Optional[float] = None
+    total_retries: Optional[int] = None
+    token_logprobs: Optional[List[Dict[str, Any]]] = None
+
+
+class TranslateRequest(BaseModel):
+    """Request model for document translation."""
+    content: str
+
+

@@ -16,6 +16,23 @@ let previewTotalPages = 1;
 let currentPdfFilename = null;
 let previewPagesList = [];
 let pageConfidenceMap = {};
+let activeJobTokenLogprobs = {};
+let zoneDrawing = false;
+let zoneStartX = 0;
+let zoneStartY = 0;
+let zoneCoordinates = null;
+let activeLowConfidenceSpan = null;
+
+// Zoom and Pan State for PDF Preview
+let zoomScale = 1.0;
+let panX = 0;
+let panY = 0;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+
+// Markdown Preview Font Zoom State
+let mdZoomScale = 1.0;
 
 // DOM Elements cache
 const DOM = {
@@ -39,6 +56,14 @@ const DOM = {
   selectImgDim: document.getElementById('select-img-dim'),
   inputOutputDir: document.getElementById('input-output-dir'),
   inputPageRange: document.getElementById('input-page-range'),
+  inputCustomGlossary: document.getElementById('input-custom-glossary'),
+  inputStrictMode: document.getElementById('input-strict-mode'),
+  selectReadingDirection: document.getElementById('select-reading-direction'),
+  selectDocumentStructure: document.getElementById('select-document-structure'),
+  inputFilterBinarize: document.getElementById('input-filter-binarize'),
+  inputFilterContrast: document.getElementById('input-filter-contrast'),
+  inputFilterDespeckle: document.getElementById('input-filter-despeckle'),
+  inputConsensusMode: document.getElementById('input-consensus-mode'),
   btnSettingsCancel: document.getElementById('btn-settings-cancel'),
   btnOpenLogs: document.getElementById('btn-open-logs'),
 
@@ -68,11 +93,24 @@ const DOM = {
   btnPreviewNext: document.getElementById('btn-preview-next'),
   txtPreviewPageLabel: document.getElementById('txt-preview-page-label'),
   previewConfidenceBadge: document.getElementById('preview-confidence-badge'),
+  analyticsRuntime: document.getElementById('analytics-runtime'),
+  analyticsConfidence: document.getElementById('analytics-confidence'),
+  analyticsRetries: document.getElementById('analytics-retries'),
   btnResultsCopy: document.getElementById('btn-results-copy'),
   btnResultsDownload: document.getElementById('btn-results-download'),
   btnResultsDownloadWord: document.getElementById('btn-results-download-word'),
   btnResultsDownloadHtml: document.getElementById('btn-results-download-html'),
   btnResultsNew: document.getElementById('btn-results-new'),
+  btnResultsTranslate: document.getElementById('btn-results-translate'),
+  zoneCanvas: document.getElementById('zone-canvas'),
+  btnRerunZone: document.getElementById('btn-rerun-zone'),
+  previewZoomWrapper: document.getElementById('preview-zoom-wrapper'),
+  btnZoomOut: document.getElementById('btn-zoom-out'),
+  btnZoomIn: document.getElementById('btn-zoom-in'),
+  btnZoomReset: document.getElementById('btn-zoom-reset'),
+  btnMdZoomOut: document.getElementById('btn-md-zoom-out'),
+  btnMdZoomIn: document.getElementById('btn-md-zoom-in'),
+  btnMdZoomReset: document.getElementById('btn-md-zoom-reset'),
 };
 
 /**
@@ -115,12 +153,14 @@ async function checkHealthStatus() {
 /**
  * Fetches available models and populates the model dropdown
  */
-async function populateModelsDropdown(savedModel) {
+async function populateModelsDropdown(savedModel, savedTranslationModel) {
   const select = DOM.selectModel;
+  const selectTrans = document.getElementById('select-translation-model');
   if (!select) return;
 
   // Show loading option
   select.innerHTML = '<option value="" disabled selected>Loading models...</option>';
+  if (selectTrans) selectTrans.innerHTML = '<option value="" disabled selected>Loading models...</option>';
 
   let models = [];
   try {
@@ -130,6 +170,7 @@ async function populateModelsDropdown(savedModel) {
   }
 
   select.innerHTML = '';
+  if (selectTrans) selectTrans.innerHTML = '<option value="">Default (Same as OCR Model)</option>';
 
   // Check if we need to add the saved model as a temporary option (fallback/offline safety)
   if (savedModel && !models.includes(savedModel)) {
@@ -145,6 +186,13 @@ async function populateModelsDropdown(savedModel) {
     opt.value = modelId;
     opt.textContent = modelId;
     select.appendChild(opt);
+    
+    if (selectTrans) {
+      const optTrans = document.createElement('option');
+      optTrans.value = modelId;
+      optTrans.textContent = modelId;
+      selectTrans.appendChild(optTrans);
+    }
   });
 
   // Select the saved model
@@ -152,6 +200,10 @@ async function populateModelsDropdown(savedModel) {
     select.value = savedModel;
   } else if (select.options.length > 0) {
     select.selectedIndex = 0;
+  }
+  
+  if (selectTrans && savedTranslationModel) {
+    selectTrans.value = savedTranslationModel;
   }
 }
 
@@ -165,11 +217,19 @@ async function loadSettings() {
     DOM.inputWorkers.value = appSettings.workers || 4;
     DOM.inputPagesGroup.value = appSettings.pages_per_group || 20;
     DOM.selectImgDim.value = appSettings.target_longest_image_dim || 1024;
-    DOM.inputOutputDir.value = appSettings.output_dir || '';
     DOM.inputPageRange.value = appSettings.page_range || '';
+    DOM.inputCustomGlossary.value = appSettings.custom_glossary || '';
+    DOM.inputStrictMode.checked = !!appSettings.strict_mode;
+    DOM.selectReadingDirection.value = appSettings.reading_direction || 'Default';
+    DOM.selectDocumentStructure.value = appSettings.document_structure || 'Standard';
+    DOM.inputFilterBinarize.checked = !!appSettings.binarize;
+    DOM.inputFilterContrast.checked = !!appSettings.high_contrast;
+    DOM.inputFilterDespeckle.checked = !!appSettings.despeckle;
+    DOM.inputConsensusMode.checked = !!appSettings.consensus_mode;
 
     // Dynamically populate model dropdown
-    await populateModelsDropdown(appSettings.model);
+    await populateModelsDropdown(appSettings.model, appSettings.translation_model);
+
   } catch (err) {
     console.error('Failed to load settings:', err);
   }
@@ -183,11 +243,20 @@ async function saveSettings(e) {
   const config = {
     server_url: DOM.inputServer.value.trim(),
     model: DOM.selectModel.value ? DOM.selectModel.value.trim() : '',
+    translation_model: document.getElementById('select-translation-model')?.value ? document.getElementById('select-translation-model').value.trim() : '',
     workers: parseInt(DOM.inputWorkers.value, 10),
     pages_per_group: parseInt(DOM.inputPagesGroup.value, 10),
     target_longest_image_dim: parseInt(DOM.selectImgDim.value, 10),
     output_dir: DOM.inputOutputDir.value.trim(),
     page_range: DOM.inputPageRange.value.trim(),
+    custom_glossary: DOM.inputCustomGlossary.value.trim(),
+    strict_mode: DOM.inputStrictMode.checked,
+    reading_direction: DOM.selectReadingDirection.value,
+    document_structure: DOM.selectDocumentStructure.value,
+    binarize: DOM.inputFilterBinarize.checked,
+    high_contrast: DOM.inputFilterContrast.checked,
+    despeckle: DOM.inputFilterDespeckle.checked,
+    consensus_mode: DOM.inputConsensusMode.checked,
   };
 
   try {
@@ -397,6 +466,9 @@ async function handleWebSocketMessage(data) {
       if (data.confidence !== undefined && data.confidence !== null) {
         pageConfidenceMap[data.page_num] = data.confidence;
       }
+      if (data.token_logprobs !== undefined && data.token_logprobs !== null) {
+        activeJobTokenLogprobs[data.page_num] = data.token_logprobs;
+      }
     } else if (data.event === 'page_failed') {
       updatePageCardStatus(data.page_num, 'failed');
     }
@@ -541,10 +613,47 @@ async function showResults(pdfFilename, outputFilename) {
   showView('view-results');
 
   try {
-    // Attempt to restore confidence scores from the backend job state
+    let matchingJob = null;
     try {
       const jobs = await api.getRecentJobs();
-      const matchingJob = jobs.find(j => j.output_filename === outputFilename);
+      matchingJob = jobs.find(j => j.output_filename === outputFilename);
+      
+      // Render Job-Level Analytics diagnostics summary
+      if (matchingJob) {
+        if (matchingJob.total_runtime !== undefined && matchingJob.total_runtime !== null) {
+          DOM.analyticsRuntime.textContent = `${matchingJob.total_runtime}s`;
+        } else {
+          DOM.analyticsRuntime.textContent = '--';
+        }
+
+        if (matchingJob.average_confidence !== undefined && matchingJob.average_confidence !== null) {
+          const avgConf = matchingJob.average_confidence;
+          DOM.analyticsConfidence.textContent = `${avgConf}%`;
+          DOM.analyticsConfidence.className = 'analytics-value';
+          if (avgConf >= 90.0) {
+            DOM.analyticsConfidence.style.color = '#00d4aa';
+          } else if (avgConf >= 75.0) {
+            DOM.analyticsConfidence.style.color = '#fbbf24';
+          } else {
+            DOM.analyticsConfidence.style.color = '#ef4444';
+          }
+        } else {
+          DOM.analyticsConfidence.textContent = '--';
+          DOM.analyticsConfidence.style.color = '';
+        }
+
+        if (matchingJob.total_retries !== undefined && matchingJob.total_retries !== null) {
+          DOM.analyticsRetries.textContent = matchingJob.total_retries;
+        } else {
+          DOM.analyticsRetries.textContent = '0';
+        }
+      } else {
+        DOM.analyticsRuntime.textContent = '--';
+        DOM.analyticsConfidence.textContent = '--';
+        DOM.analyticsConfidence.style.color = '';
+        DOM.analyticsRetries.textContent = '--';
+      }
+
       if (matchingJob && matchingJob.page_confidence) {
         for (const [pageNumStr, conf] of Object.entries(matchingJob.page_confidence)) {
           pageConfidenceMap[parseInt(pageNumStr, 10)] = conf;
@@ -559,9 +668,38 @@ async function showResults(pdfFilename, outputFilename) {
     const res = await fetch(fileUrl);
     if (res.ok) {
       const markdown = await res.text();
-      DOM.txtMarkdownPreview.value = markdown;
+      
+      activeJobTokenLogprobs = {};
+      if (matchingJob && matchingJob.page_token_logprobs) {
+        activeJobTokenLogprobs = matchingJob.page_token_logprobs;
+      }
 
-      // Parse processed page list from markdown headers
+      const pages = parseMarkdownIntoPages(markdown);
+      DOM.txtMarkdownPreview.innerHTML = '';
+      pages.forEach(p => {
+        const block = document.createElement('div');
+        block.className = 'ocr-page-block';
+        block.setAttribute('data-page', p.page_num);
+
+        const header = document.createElement('div');
+        header.className = 'ocr-page-header';
+        header.setAttribute('contenteditable', 'false');
+        header.textContent = `<!-- PAGE ${String(p.page_num).padStart(3, '0')} -->`;
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'ocr-page-content';
+        contentDiv.setAttribute('contenteditable', 'true');
+        
+        const logprobs = activeJobTokenLogprobs[p.page_num] || activeJobTokenLogprobs[String(p.page_num)];
+        contentDiv.innerHTML = renderPageContentHTML(p.content, logprobs);
+
+        contentDiv.addEventListener('input', triggerAutoSave);
+
+        block.appendChild(header);
+        block.appendChild(contentDiv);
+        DOM.txtMarkdownPreview.appendChild(block);
+      });
+
       const markerRegex = /<!-- PAGE (\d{3}) -->/g;
       let match;
       previewPagesList = [];
@@ -584,10 +722,10 @@ async function showResults(pdfFilename, outputFilename) {
         DOM.btnPreviewNext.disabled = true;
       }
     } else {
-      DOM.txtMarkdownPreview.value = `Failed to load preview. You can still try downloading the file: ${outputFilename}`;
+      DOM.txtMarkdownPreview.textContent = `Failed to load preview. You can still try downloading the file: ${outputFilename}`;
     }
   } catch (err) {
-    DOM.txtMarkdownPreview.value = `Error loading preview: ${err.message}`;
+    DOM.txtMarkdownPreview.textContent = `Error loading preview: ${err.message}`;
   }
 }
 
@@ -596,6 +734,14 @@ async function showResults(pdfFilename, outputFilename) {
  */
 function loadPreviewPage(pageIndex) {
   if (previewPagesList.length === 0) return;
+
+  // Reset zoom and pan on page change
+  zoomScale = 1.0;
+  panX = 0;
+  panY = 0;
+  if (DOM.previewZoomWrapper) {
+    DOM.previewZoomWrapper.style.transform = 'translate(0px, 0px) scale(1)';
+  }
 
   // Clamp index
   if (pageIndex < 0) pageIndex = 0;
@@ -623,6 +769,15 @@ function loadPreviewPage(pageIndex) {
   const score = pageConfidenceMap[actualPageNum];
   updateConfidenceBadge(score);
 
+  // Clear zoning canvas on page change
+  const canvas = DOM.zoneCanvas;
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  DOM.btnRerunZone.classList.add('is-hidden');
+  zoneCoordinates = null;
+
   // Scroll textarea to the start of this page's content
   scrollTextareaToPage(actualPageNum);
 }
@@ -631,23 +786,18 @@ function loadPreviewPage(pageIndex) {
  * Align textarea scroll position to a specific page marker
  */
 function scrollTextareaToPage(pageNum) {
-  const textarea = DOM.txtMarkdownPreview;
-  const text = textarea.value;
-  const marker = `<!-- PAGE ${pageNum.toString().padStart(3, '0')} -->`;
-  const charIndex = text.indexOf(marker);
-
-  if (charIndex !== -1) {
-    // Focus and highlight the page tag
-    textarea.focus();
-    textarea.setSelectionRange(charIndex, charIndex + marker.length);
-
-    // Calculate vertical scroll position using newlines to prevent density misalignment
-    const textBefore = text.substring(0, charIndex);
-    const linesBefore = textBefore.split('\n').length - 1;
-    const totalLines = text.split('\n').length;
-
-    const lineRatio = linesBefore / totalLines;
-    textarea.scrollTop = lineRatio * textarea.scrollHeight;
+  const previewContainer = DOM.txtMarkdownPreview;
+  const block = previewContainer.querySelector(`.ocr-page-block[data-page="${pageNum}"]`);
+  if (block) {
+    block.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    
+    const header = block.querySelector('.ocr-page-header');
+    if (header) {
+      header.style.color = 'var(--accent-primary)';
+      setTimeout(() => {
+        header.style.color = '#64748b';
+      }, 1500);
+    }
   }
 }
 
@@ -729,26 +879,82 @@ function bindEvents() {
 
   // Results screen actions
   DOM.btnResultsCopy.addEventListener('click', () => {
-    DOM.txtMarkdownPreview.select();
-    navigator.clipboard.writeText(DOM.txtMarkdownPreview.value)
+    const text = getMarkdownText();
+    navigator.clipboard.writeText(text)
       .then(() => alert('Markdown copied to clipboard!'))
       .catch(err => alert(`Failed to copy text: ${err}`));
   });
 
-  DOM.btnResultsDownload.addEventListener('click', () => {
+  DOM.btnResultsTranslate.addEventListener('click', async () => {
+    if (!currentOutputFilename) return;
+    
+    DOM.btnResultsTranslate.disabled = true;
+    DOM.btnResultsTranslate.textContent = 'Translating...';
+    
+    await forceSave();
+    const text = getMarkdownText();
+    
+    try {
+      const response = await fetch('/api/jobs/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: text })
+      });
+      
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      
+      const result = await response.json();
+      
+      DOM.txtMarkdownPreview.innerHTML = '';
+      const block = document.createElement('div');
+      block.className = 'ocr-page-block';
+      block.setAttribute('data-page', '1');
+      
+      const header = document.createElement('div');
+      header.className = 'ocr-page-header';
+      header.setAttribute('contenteditable', 'false');
+      header.textContent = `<!-- TRANSLATED DOCUMENT (English) -->`;
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'ocr-page-content';
+      contentDiv.setAttribute('contenteditable', 'true');
+      contentDiv.textContent = result.translated_text;
+      
+      contentDiv.addEventListener('input', triggerAutoSave);
+      
+      block.appendChild(header);
+      block.appendChild(contentDiv);
+      DOM.txtMarkdownPreview.appendChild(block);
+      
+      await forceSave();
+      alert('Document translated successfully!');
+    } catch (err) {
+      alert(`Translation failed: ${err.message}`);
+    } finally {
+      DOM.btnResultsTranslate.disabled = false;
+      DOM.btnResultsTranslate.textContent = 'Translate to English';
+    }
+  });
+
+  DOM.btnResultsDownload.addEventListener('click', async () => {
     if (currentOutputFilename) {
+      await forceSave();
       api.downloadResult(currentOutputFilename);
     }
   });
 
-  DOM.btnResultsDownloadWord.addEventListener('click', () => {
+  DOM.btnResultsDownloadWord.addEventListener('click', async () => {
     if (currentOutputFilename) {
+      await forceSave();
       api.downloadResult(currentOutputFilename, 'docx');
     }
   });
 
-  DOM.btnResultsDownloadHtml.addEventListener('click', () => {
+  DOM.btnResultsDownloadHtml.addEventListener('click', async () => {
     if (currentOutputFilename) {
+      await forceSave();
       api.downloadResult(currentOutputFilename, 'html');
     }
   });
@@ -779,6 +985,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Bind actions
   bindEvents();
   setupDragAndDrop();
+  setupZoningCanvas();
+  setupQAPopover();
+
+  // Align canvas on image load/resize
+  DOM.previewPageImg.addEventListener('load', resizeCanvasToImage);
+  window.addEventListener('resize', resizeCanvasToImage);
 
   // Load initial configurations
   await loadSettings();
@@ -791,3 +1003,634 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Start WS Progress updates
   connectWs(handleWebSocketMessage);
 });
+
+// ===========================================================================
+// Interactive UI Suite Helpers (Phase 4.10)
+// ===========================================================================
+
+function resizeCanvasToImage() {
+  const img = DOM.previewPageImg;
+  const canvas = DOM.zoneCanvas;
+  if (!img || !canvas) return;
+  
+  if (img.complete && img.naturalWidth) {
+    canvas.style.left = `${img.offsetLeft}px`;
+    canvas.style.top = `${img.offsetTop}px`;
+    canvas.style.width = `${img.offsetWidth}px`;
+    canvas.style.height = `${img.offsetHeight}px`;
+    canvas.width = img.offsetWidth;
+    canvas.height = img.offsetHeight;
+  }
+}
+
+function parseMarkdownIntoPages(markdown) {
+  const pageRegex = /<!-- PAGE (\d{3}) -->/g;
+  const pages = [];
+  let match;
+  let lastIndex = 0;
+  let lastPageNum = null;
+
+  while ((match = pageRegex.exec(markdown)) !== null) {
+    if (lastPageNum !== null) {
+      pages.push({
+        page_num: lastPageNum,
+        content: markdown.substring(lastIndex, match.index)
+      });
+    }
+    lastPageNum = parseInt(match[1], 10);
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastPageNum !== null) {
+    pages.push({
+      page_num: lastPageNum,
+      content: markdown.substring(lastIndex)
+    });
+  }
+
+  if (pages.length === 0 && markdown.trim()) {
+    pages.push({
+      page_num: 1,
+      content: markdown
+    });
+  }
+
+  return pages;
+}
+
+function renderPageContentHTML(text, tokenLogprobs) {
+  if (!tokenLogprobs || tokenLogprobs.length === 0) {
+    return escapeHtml(text);
+  }
+
+  let html = '';
+  tokenLogprobs.forEach(item => {
+    const tokenStr = item.token;
+    const confidence = item.confidence;
+    const topLogprobs = item.top_logprobs || [];
+    const escapedToken = escapeHtml(tokenStr);
+
+    if (confidence !== null && confidence < 80.0) {
+      const topChoicesAttr = encodeURIComponent(JSON.stringify(topLogprobs));
+      html += `<span class="low-confidence" data-confidence="${confidence}" data-original="${escapedToken}" data-top-choices="${topChoicesAttr}">${escapedToken}</span>`;
+    } else {
+      html += escapedToken;
+    }
+  });
+
+  return html;
+}
+
+function escapeHtml(string) {
+  return String(string)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function getMarkdownText() {
+  const blocks = DOM.txtMarkdownPreview.querySelectorAll('.ocr-page-block');
+  if (blocks.length === 0) {
+    return DOM.txtMarkdownPreview.textContent || '';
+  }
+
+  const pagesText = [];
+  blocks.forEach(block => {
+    const header = block.querySelector('.ocr-page-header');
+    const content = block.querySelector('.ocr-page-content');
+    if (header && content) {
+      // Use textContent instead of innerText to preserve spacing/indentation exactly as approved.
+      const pageText = content.textContent || '';
+      pagesText.push(`${header.textContent}\n${pageText}\n\n`);
+    }
+  });
+
+  return pagesText.join('');
+}
+
+let saveTimeout = null;
+function triggerAutoSave() {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(forceSave, 1500);
+}
+
+async function forceSave() {
+  if (saveTimeout) clearTimeout(saveTimeout);
+  if (!currentOutputFilename) return;
+  const text = getMarkdownText();
+  try {
+    const response = await fetch(`/api/download/${encodeURIComponent(currentOutputFilename)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text })
+    });
+    if (!response.ok) {
+      console.error('Failed to save content:', await response.text());
+    } else {
+      console.log('Document auto-saved');
+    }
+  } catch (err) {
+    console.error('Failed to save edited markdown:', err);
+  }
+}
+
+function mergeReprocessedText(currentText, newText) {
+  if (!currentText || !currentText.trim()) return newText;
+  
+  const clean = (str) => str.replace(/\s+/g, '');
+  const cleanNew = clean(newText);
+  if (!cleanNew) return currentText;
+  
+  if (clean(currentText).includes(cleanNew)) {
+    return currentText;
+  }
+  
+  let bestScore = 0;
+  let bestStart = -1;
+  let bestEnd = -1;
+  
+  const windowSizes = [cleanNew.length];
+  for (let i = 1; i <= 8; i++) {
+    windowSizes.push(cleanNew.length - i);
+    windowSizes.push(cleanNew.length + i);
+  }
+  
+  for (let size of windowSizes) {
+    if (size <= 0 || size > currentText.length) continue;
+    
+    for (let i = 0; i <= currentText.length - size; i++) {
+      const candidate = currentText.substr(i, size);
+      const cleanCandidate = clean(candidate);
+      
+      const lcs = getLcsLength(cleanCandidate, cleanNew);
+      const score = lcs / Math.max(cleanCandidate.length, cleanNew.length);
+      
+      if (score > bestScore && score > 0.4) {
+        bestScore = score;
+        bestStart = i;
+        bestEnd = i + size;
+      }
+    }
+  }
+  
+  if (bestStart !== -1 && bestScore >= 0.5) {
+    return currentText.slice(0, bestStart) + newText + currentText.slice(bestEnd);
+  }
+  
+  const selection = window.getSelection();
+  if (selection && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    if (range.commonAncestorContainer && range.commonAncestorContainer.parentElement && range.commonAncestorContainer.parentElement.closest('.ocr-page-content')) {
+      range.deleteContents();
+      range.insertNode(document.createTextNode(newText));
+      return null;
+    }
+  }
+  
+  return currentText + '\n' + newText;
+}
+
+function getLcsLength(s1, s2) {
+  const m = s1.length;
+  const n = s2.length;
+  const dp = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (s1[i - 1] === s2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+  return dp[m][n];
+}
+
+function updateReprocessedPage(pageNum, naturalText, tokenLogprobs, confidenceScore) {
+  if (confidenceScore !== undefined && confidenceScore !== null) {
+    pageConfidenceMap[pageNum] = confidenceScore;
+    if (pageNum === previewPagesList[previewCurrentPage]) {
+      updateConfidenceBadge(confidenceScore);
+    }
+  }
+
+  if (tokenLogprobs) {
+    activeJobTokenLogprobs[pageNum] = tokenLogprobs;
+  }
+
+  const isTranslated = DOM.txtMarkdownPreview.innerHTML.includes('TRANSLATED DOCUMENT');
+  let block;
+  if (isTranslated) {
+    block = DOM.txtMarkdownPreview.querySelector('.ocr-page-block');
+  } else {
+    block = DOM.txtMarkdownPreview.querySelector(`.ocr-page-block[data-page="${pageNum}"]`);
+  }
+
+  if (block) {
+    const contentDiv = block.querySelector('.ocr-page-content');
+    if (contentDiv) {
+      const currentText = contentDiv.innerText || contentDiv.textContent || '';
+      const mergedText = mergeReprocessedText(currentText, naturalText);
+      
+      if (mergedText !== null) {
+        contentDiv.innerHTML = escapeHtml(mergedText);
+        forceSave();
+      }
+    }
+  }
+}
+
+function setupZoningCanvas() {
+  const canvas = DOM.zoneCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const btnRerun = DOM.btnRerunZone;
+
+  // Zoom and Pan updates helper
+  function updateZoomTransform() {
+    const wrapper = DOM.previewZoomWrapper;
+    if (wrapper) {
+      wrapper.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+    }
+    if (canvas) {
+      canvas.style.cursor = (zoomScale > 1.0) ? 'grab' : 'crosshair';
+    }
+  }
+
+  // Prevent browser context menu on canvas so right-click drag is smooth
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
+  // Bind mouse wheel zoom on the canvas container
+  const container = document.querySelector('.pdf-image-container');
+  if (container) {
+    container.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomIntensity = 0.1;
+      const oldScale = zoomScale;
+
+      if (e.deltaY < 0) {
+        zoomScale = Math.min(zoomScale + zoomIntensity, 5.0);
+      } else {
+        zoomScale = Math.max(zoomScale - zoomIntensity, 1.0);
+      }
+
+      if (zoomScale === 1.0) {
+        panX = 0;
+        panY = 0;
+      } else {
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const factor = (zoomScale / oldScale) - 1;
+        panX -= (mouseX - rect.width / 2 - panX) * factor;
+        panY -= (mouseY - rect.height / 2 - panY) * factor;
+      }
+
+      updateZoomTransform();
+    }, { passive: false });
+  }
+
+  // Keyboard modifiers for grab cursor
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') {
+      canvas.style.cursor = 'grab';
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+      canvas.style.cursor = (zoomScale > 1.0) ? 'grab' : 'crosshair';
+    }
+  });
+
+  // Mousedown: either pan or draw zone
+  canvas.addEventListener('mousedown', (e) => {
+    // Pan mode triggers if shift is pressed, right/middle click, or if zoomed in (zoomScale > 1.0)
+    if (e.shiftKey || e.button === 1 || e.button === 2 || zoomScale > 1.0) {
+      isPanning = true;
+      panStartX = e.clientX - panX;
+      panStartY = e.clientY - panY;
+      canvas.style.cursor = 'grabbing';
+      if (e.button === 2) {
+        e.preventDefault();
+      }
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    zoneStartX = (e.clientX - rect.left) * scaleX;
+    zoneStartY = (e.clientY - rect.top) * scaleY;
+    zoneDrawing = true;
+    zoneCoordinates = null;
+    btnRerun.classList.add('is-hidden');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+
+  // Mousemove: either pan or update zone rectangle
+  canvas.addEventListener('mousemove', (e) => {
+    if (isPanning) {
+      panX = e.clientX - panStartX;
+      panY = e.clientY - panStartY;
+      updateZoomTransform();
+      return;
+    }
+
+    if (!zoneDrawing) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const currentX = (e.clientX - rect.left) * scaleX;
+    const currentY = (e.clientY - rect.top) * scaleY;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
+    
+    const x = Math.min(zoneStartX, currentX);
+    const y = Math.min(zoneStartY, currentY);
+    const w = Math.abs(currentX - zoneStartX);
+    const h = Math.abs(currentY - zoneStartY);
+
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+  });
+
+  // Mouseup: finalize pan or zone coordinates
+  canvas.addEventListener('mouseup', (e) => {
+    if (isPanning) {
+      isPanning = false;
+      canvas.style.cursor = (zoomScale > 1.0 || e.shiftKey) ? 'grab' : 'crosshair';
+      return;
+    }
+
+    if (!zoneDrawing) return;
+    zoneDrawing = false;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const currentX = (e.clientX - rect.left) * scaleX;
+    const currentY = (e.clientY - rect.top) * scaleY;
+
+    const w = Math.abs(currentX - zoneStartX);
+    const h = Math.abs(currentY - zoneStartY);
+
+    if (w < 10 || h < 10) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      btnRerun.classList.add('is-hidden');
+      zoneCoordinates = null;
+      return;
+    }
+
+    const x = Math.min(zoneStartX, currentX);
+    const y = Math.min(zoneStartY, currentY);
+
+    zoneCoordinates = {
+      x: x / canvas.width,
+      y: y / canvas.height,
+      width: w / canvas.width,
+      height: h / canvas.height
+    };
+
+    btnRerun.classList.remove('is-hidden');
+  });
+
+  // Simple click outside zone clears drawing
+  canvas.addEventListener('click', (e) => {
+    if (e.shiftKey) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    const currentX = (e.clientX - rect.left) * scaleX;
+    const currentY = (e.clientY - rect.top) * scaleY;
+    const w = Math.abs(currentX - zoneStartX);
+    const h = Math.abs(currentY - zoneStartY);
+    if (w < 5 && h < 5) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      btnRerun.classList.add('is-hidden');
+      zoneCoordinates = null;
+    }
+  });
+
+  // Zoom Button controls
+  if (DOM.btnZoomIn) {
+    DOM.btnZoomIn.addEventListener('click', () => {
+      zoomScale = Math.min(zoomScale + 0.25, 5.0);
+      updateZoomTransform();
+    });
+  }
+  if (DOM.btnZoomOut) {
+    DOM.btnZoomOut.addEventListener('click', () => {
+      zoomScale = Math.max(zoomScale - 0.25, 1.0);
+      if (zoomScale === 1.0) {
+        panX = 0;
+        panY = 0;
+      }
+      updateZoomTransform();
+    });
+  }
+  if (DOM.btnZoomReset) {
+    DOM.btnZoomReset.addEventListener('click', () => {
+      zoomScale = 1.0;
+      panX = 0;
+      panY = 0;
+      updateZoomTransform();
+    });
+  }
+
+  // Markdown Preview zoom helper
+  function updateMdZoom() {
+    const preview = DOM.txtMarkdownPreview;
+    if (preview) {
+      preview.style.fontSize = `${mdZoomScale}rem`;
+    }
+  }
+
+  // Bind markdown preview Ctrl + wheel zoom
+  if (DOM.txtMarkdownPreview) {
+    DOM.txtMarkdownPreview.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const zoomIntensity = 0.1;
+        if (e.deltaY < 0) {
+          mdZoomScale = Math.min(mdZoomScale + zoomIntensity, 2.5);
+        } else {
+          mdZoomScale = Math.max(mdZoomScale - zoomIntensity, 0.7);
+        }
+        updateMdZoom();
+      }
+    }, { passive: false });
+  }
+
+  // Bind markdown zoom buttons
+  if (DOM.btnMdZoomIn) {
+    DOM.btnMdZoomIn.addEventListener('click', () => {
+      mdZoomScale = Math.min(mdZoomScale + 0.1, 2.5);
+      updateMdZoom();
+    });
+  }
+  if (DOM.btnMdZoomOut) {
+    DOM.btnMdZoomOut.addEventListener('click', () => {
+      mdZoomScale = Math.max(mdZoomScale - 0.1, 0.7);
+      updateMdZoom();
+    });
+  }
+  if (DOM.btnMdZoomReset) {
+    DOM.btnMdZoomReset.addEventListener('click', () => {
+      mdZoomScale = 1.0;
+      updateMdZoom();
+    });
+  }
+
+  btnRerun.addEventListener('click', async () => {
+    if (!currentJobId || !zoneCoordinates) return;
+    const pageNum = previewPagesList[previewCurrentPage];
+    
+    btnRerun.disabled = true;
+    btnRerun.textContent = 'Processing...';
+
+    try {
+      const response = await fetch('/api/jobs/reprocess-zone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id: currentJobId,
+          page_num: pageNum,
+          x: zoneCoordinates.x,
+          y: zoneCoordinates.y,
+          width: zoneCoordinates.width,
+          height: zoneCoordinates.height
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const result = await response.json();
+      
+      let textToInsert = result.natural_text;
+      const isTranslated = DOM.txtMarkdownPreview.innerHTML.includes('TRANSLATED DOCUMENT');
+      if (isTranslated) {
+        btnRerun.textContent = 'Translating...';
+        try {
+          const transRes = await fetch('/api/jobs/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: result.natural_text })
+          });
+          if (transRes.ok) {
+            const transJson = await transRes.json();
+            textToInsert = transJson.translated_text;
+          }
+        } catch (transErr) {
+          console.error('Failed to translate reprocessed zone text:', transErr);
+        }
+      }
+      
+      updateReprocessedPage(result.page_num, textToInsert, isTranslated ? null : result.token_logprobs, result.confidence_score);
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      btnRerun.classList.add('is-hidden');
+      zoneCoordinates = null;
+      alert('Zone reprocessed successfully!');
+    } catch (err) {
+      alert(`Reprocessing zone failed: ${err.message}`);
+    } finally {
+      btnRerun.disabled = false;
+      btnRerun.textContent = 'Re-Run Zone';
+    }
+  });
+}
+
+function setupQAPopover() {
+  const popover = document.getElementById('qa-popover');
+  if (!popover) return;
+  const suggestionsList = document.getElementById('qa-suggestions-list');
+  const inputCorrection = document.getElementById('input-qa-correction');
+  const btnApply = document.getElementById('btn-qa-apply');
+
+  DOM.txtMarkdownPreview.addEventListener('click', (e) => {
+    const target = e.target;
+    if (target.classList.contains('low-confidence')) {
+      activeLowConfidenceSpan = target;
+      
+      const rect = target.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+      popover.style.top = `${rect.bottom + scrollTop + 8}px`;
+      popover.style.left = `${rect.left + scrollLeft}px`;
+      popover.classList.remove('is-hidden');
+
+      inputCorrection.value = target.textContent;
+      inputCorrection.focus();
+      inputCorrection.select();
+
+      suggestionsList.innerHTML = '';
+      const topChoicesRaw = target.getAttribute('data-top-choices');
+      if (topChoicesRaw) {
+        try {
+          const choices = JSON.parse(decodeURIComponent(topChoicesRaw));
+          if (choices && choices.length > 0) {
+            choices.forEach(ch => {
+              const btn = document.createElement('button');
+              btn.className = 'qa-suggestion-badge';
+              btn.textContent = ch.token;
+              btn.title = `Confidence: ${ch.confidence}%`;
+              btn.addEventListener('click', () => {
+                target.textContent = ch.token;
+                target.classList.remove('low-confidence');
+                popover.classList.add('is-hidden');
+                forceSave();
+              });
+              suggestionsList.appendChild(btn);
+            });
+          } else {
+            suggestionsList.textContent = 'No suggestions';
+          }
+        } catch (err) {
+          console.error('Failed to parse suggestions:', err);
+        }
+      }
+    } else {
+      popover.classList.add('is-hidden');
+    }
+  });
+
+  btnApply.addEventListener('click', () => {
+    if (activeLowConfidenceSpan) {
+      activeLowConfidenceSpan.textContent = inputCorrection.value;
+      activeLowConfidenceSpan.classList.remove('low-confidence');
+      popover.classList.add('is-hidden');
+      forceSave();
+    }
+  });
+
+  inputCorrection.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      btnApply.click();
+    }
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!popover.contains(e.target) && !e.target.classList.contains('low-confidence')) {
+      popover.classList.add('is-hidden');
+    }
+  });
+}

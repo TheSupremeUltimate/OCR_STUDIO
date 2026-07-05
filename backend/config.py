@@ -22,6 +22,7 @@ SETTINGS_FILE = PROJECT_ROOT / "settings.json"
 DEFAULTS = {
     "server_url": "http://192.168.20.50:1234/v1",
     "model": "allenai_olmocr-2-7b-1025",
+    "translation_model": "",
     "workers": 2,
     "pages_per_group": 5,
     "target_longest_image_dim": 768,
@@ -29,6 +30,14 @@ DEFAULTS = {
     "max_tokens": 1600,
     "output_dir": "",
     "page_range": "",
+    "custom_glossary": "",
+    "strict_mode": False,
+    "reading_direction": "Default",
+    "document_structure": "Standard",
+    "binarize": False,
+    "high_contrast": False,
+    "despeckle": False,
+    "consensus_mode": False,
 }
 
 

@@ -111,6 +111,15 @@
               <option value="" disabled selected>Loading models...</option>
             </select>
           </div>
+          <div class="form-group">
+            <label for="select-translation-model" style="display:flex; justify-content:space-between;">
+              <span>Translation Model</span>
+              <span style="font-size: 0.8em; color: var(--text-muted);">(Used for English Translation only)</span>
+            </label>
+            <select id="select-translation-model" class="form-control">
+              <option value="">Default (Same as OCR Model)</option>
+            </select>
+          </div>
           <div class="form-row">
             <div class="form-group">
               <label for="input-workers">Workers</label>
@@ -137,6 +146,56 @@
           <div class="form-group">
             <label for="input-page-range">Page Range (Optional)</label>
             <input type="text" id="input-page-range" class="form-control" placeholder="e.g., 1-5, 8, 11-13">
+          </div>
+          <div class="form-group">
+            <label for="input-custom-glossary">Custom Glossary (Optional)</label>
+            <textarea id="input-custom-glossary" class="form-control" placeholder="Specific terms or names to prioritize (one per line or comma-separated)" rows="3"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group checkbox-group">
+              <label for="input-strict-mode" class="checkbox-label">
+                <input type="checkbox" id="input-strict-mode">
+                Strict Archival Mode
+              </label>
+            </div>
+            <div class="form-group">
+              <label for="select-reading-direction">Reading Direction</label>
+              <select id="select-reading-direction" class="form-control">
+                <option value="Default" selected>Default (Standard)</option>
+                <option value="Vertical RTL">Vertical RTL (Traditional)</option>
+                <option value="Horizontal LTR">Horizontal LTR</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="select-document-structure">Document Structure</label>
+              <select id="select-document-structure" class="form-control">
+                <option value="Standard" selected>Standard</option>
+                <option value="Main Text + Interline Commentary">Main Text + Interline Commentary</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Image Pre-Processing Filters</label>
+            <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem;">
+              <label class="checkbox-label">
+                <input type="checkbox" id="input-filter-binarize">
+                Binarize (B/W)
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="input-filter-contrast">
+                High Contrast
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="input-filter-despeckle">
+                Despeckle
+              </label>
+              <label class="checkbox-label" title="Run concurrent passes (768px, 1024px, 2048px) and vote consensus">
+                <input type="checkbox" id="input-consensus-mode">
+                Consensus Mode
+              </label>
+            </div>
           </div>
           <div class="modal-actions" style="justify-content: space-between; display: flex;">
             <button type="button" class="btn btn--secondary" id="btn-open-logs">Open Logs</button>
@@ -251,13 +310,32 @@
           </div>
         </div>
 
+        <!-- Job-Level Analytics Dashboard -->
+        <div class="results-analytics-row" id="results-analytics-row">
+          <div class="analytics-card glass-panel">
+            <span class="analytics-label">Runtime</span>
+            <span class="analytics-value" id="analytics-runtime">--</span>
+          </div>
+          <div class="analytics-card glass-panel">
+            <span class="analytics-label">Avg Confidence</span>
+            <span class="analytics-value" id="analytics-confidence">--</span>
+          </div>
+          <div class="analytics-card glass-panel">
+            <span class="analytics-label">Total Retries</span>
+            <span class="analytics-value" id="analytics-retries">--</span>
+          </div>
+        </div>
+
         <!-- Results Split Grid -->
         <div class="results-split-grid">
           <!-- Left Column: PDF Page Preview -->
           <div class="pdf-preview-pane glass-panel">
             <h3>PDF Page Preview</h3>
-            <div class="pdf-image-container">
-              <img id="preview-page-img" src="" alt="PDF page preview" onerror="this.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; document.getElementById('preview-error-overlay').classList.remove('is-hidden');">
+            <div class="pdf-image-container" style="position: relative; overflow: hidden;">
+              <div id="preview-zoom-wrapper" style="position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; transform-origin: center center;">
+                <img id="preview-page-img" src="" alt="PDF page preview" onerror="this.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; document.getElementById('preview-error-overlay').classList.remove('is-hidden');">
+                <canvas id="zone-canvas" style="position: absolute; top: 0; left: 0; display: block; cursor: crosshair; z-index: 10;"></canvas>
+              </div>
               <div id="preview-error-overlay" class="preview-overlay is-hidden">
                 <i class="overlay-icon">⚠️</i>
                 <p class="overlay-text">Preview Unavailable</p>
@@ -265,23 +343,43 @@
               </div>
             </div>
             <div class="pdf-preview-nav">
-              <button class="btn btn--secondary btn--sm" id="btn-preview-prev">◀ Prev</button>
-              <span id="txt-preview-page-label" class="preview-page-label">Page 1 of 1</span>
-              <span id="preview-confidence-badge" class="confidence-badge badge--unknown">N/A</span>
-              <button class="btn btn--secondary btn--sm" id="btn-preview-next">Next ▶</button>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="btn btn--secondary btn--sm" id="btn-preview-prev">◀ Prev</button>
+                <span id="txt-preview-page-label" class="preview-page-label">Page 1 of 1</span>
+                <button class="btn btn--secondary btn--sm" id="btn-preview-next">Next ▶</button>
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span id="preview-confidence-badge" class="confidence-badge badge--unknown">N/A</span>
+                <button class="btn btn--primary btn--sm is-hidden" id="btn-rerun-zone">Re-Run Zone</button>
+              </div>
+
+              <div class="zoom-controls" style="display: flex; align-items: center; gap: 6px;">
+                <button class="btn btn--secondary btn--sm" id="btn-zoom-out" title="Zoom Out" style="padding: 2px 8px;">➖</button>
+                <button class="btn btn--secondary btn--sm" id="btn-zoom-in" title="Zoom In" style="padding: 2px 8px;">➕</button>
+                <button class="btn btn--secondary btn--sm" id="btn-zoom-reset" title="Reset View" style="padding: 2px 8px; font-size: 0.75rem;">Reset 🔄</button>
+              </div>
             </div>
           </div>
 
           <!-- Right Column: Markdown Preview Pane -->
           <div class="markdown-preview-pane glass-panel">
-            <h3>Markdown Preview</h3>
-            <textarea readonly id="txt-markdown-preview"></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+              <h3 style="margin-bottom: 0;">Markdown Preview</h3>
+              <div class="markdown-zoom-controls" style="display: flex; align-items: center; gap: 6px;">
+                <button class="btn btn--secondary btn--sm" id="btn-md-zoom-out" title="Zoom Out" style="padding: 2px 8px;">➖</button>
+                <button class="btn btn--secondary btn--sm" id="btn-md-zoom-in" title="Zoom In" style="padding: 2px 8px;">➕</button>
+                <button class="btn btn--secondary btn--sm" id="btn-md-zoom-reset" title="Reset Font Size" style="padding: 2px 8px; font-size: 0.75rem;">Reset 🔄</button>
+              </div>
+            </div>
+            <div id="txt-markdown-preview" class="markdown-preview-editable" contenteditable="true"></div>
           </div>
         </div>
 
         <!-- Action Buttons -->
         <div class="results-action-bar">
           <button class="btn btn--secondary" id="btn-results-copy">Copy to Clipboard</button>
+          <button class="btn btn--secondary" id="btn-results-translate">Translate to English</button>
           <button class="btn btn--primary" id="btn-results-download">Download Full Markdown</button>
           <button class="btn btn--secondary" id="btn-results-download-word">Download Word (.docx)</button>
           <button class="btn btn--secondary" id="btn-results-download-html">Download HTML</button>
@@ -291,6 +389,20 @@
     </section>
 
   </main>
+
+  <!-- Inline QA Correction Popover -->
+  <div id="qa-popover" class="qa-popover is-hidden">
+    <div class="qa-popover-content">
+      <div class="qa-suggestions-label">Suggestions:</div>
+      <div id="qa-suggestions-list" class="qa-suggestions-list">
+        <!-- clickable tokens populated dynamically -->
+      </div>
+      <div class="qa-input-row">
+        <input type="text" id="input-qa-correction" class="input-text input-text--sm" placeholder="Type correction...">
+        <button class="btn btn--primary btn--sm" id="btn-qa-apply">Apply</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Main Controller script -->
   <script type="module" src="js/app.js"></script>

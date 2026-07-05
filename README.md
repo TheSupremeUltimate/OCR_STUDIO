@@ -8,11 +8,19 @@ OCR Studio is a premium, local, web-based GUI application that wraps the OlmOCR 
 
 * **Drag-and-Drop Interface:** Easily upload single or multiple PDFs through a clean, glassmorphic dark-mode web dashboard.
 * **Granular Progress Tracking:** Monitor real-time page-by-page progress status and estimated time of completion (ETA) via WebSockets.
-* **Side-by-Side Preview:** View the generated Markdown text alongside the original rendered PDF page side-by-side.
-* **Page Range Selection:** Process specific pages or ranges (e.g., `1-5, 8, 11-13`) to save time and API tokens.
-* **Accuracy & Confidence Reports:** View average logprob confidence scores for each processed page.
-* **Multi-Format Export:** Download your OCR results as Markdown (`.md`), HTML, or Word Document (`.docx`) formats.
-* **Crash Recovery & True Resumption:** Automatically skips already-processed pages if a job is interrupted, saving inference time.
+* **Multi-Format Export & Auto-TOC:** Download results as Markdown (`.md`), HTML, or Word Document (`.docx`). The engine automatically detects chapter headers and prepends a hyperlinked Table of Contents.
+* **Image Pre-Processing:** Clean noisy archival scans on the fly using built-in Pillow filters (Binarization, High Contrast, Despeckle).
+* **Self-Healing AI:** Automatically detects and corrects page rotation errors, auto-upscales target resolutions for dense tables and small Vertical RTL annotations, and triggers smart retries on low-confidence pages.
+* **Archival Layout Support:** Built-in settings to handle traditional vertical right-to-left (RTL) reading orders and complex hierarchical layouts (Main Text + Interline Commentary brackets).
+* **Side-by-Side Interactive Preview:** View the generated Markdown text alongside the original rendered PDF page inside a structured page-segmented QA editor with crisp, non-blurry hardware-accelerated infinite zoom.
+* **Token-Level Heatmaps:** Highlight low-confidence characters/words (confidence < 80%) with a premium red-to-yellow dotted underline.
+* **Human-in-the-Loop QA Editor:** Click highlighted heatmap characters to display model-suggested alternative predictions or type manual overrides.
+* **Fuzzy-Merge Zone Reprocessing:** Draw bounding boxes directly on the PDF preview canvas to crop out marginalia/stamps. The engine uses a non-destructive sliding-window LCS algorithm to intelligently splice the corrected text directly into your existing Markdown without deleting surrounding text.
+* **Consensus Mode (3-Way Voting):** Runs concurrent OCR passes at resolutions `768px`, `1028px`, and `2048px`, aligning characters in a shared Levenshtein coordinate space to vote character-by-character and eliminate outliers.
+* **Adaptive Density Chunking:** Horizontal image overlap cropping (Top 0-60%, Bottom 40-100%) and stitching fallback when confidence drops below 75%, preserving text continuity via cross-page context memory.
+* **Dedicated Translation Routing:** Translate Classical Chinese markdown documents straight to English within the Results pane. You can isolate OCR tasks to Vision-Language Models (VLMs) and Translation tasks to NLP models via independent model dropdowns.
+* **Debounced Auto-Save & True Resumption:** Synchronizes edits to the backend instantly and automatically skips already-processed pages if a job is interrupted, saving inference time.
+* **Diagnostics Telemetry Card:** Aggregates job runtime, average confidence logs, and retries taken dynamically.
 
 ---
 
