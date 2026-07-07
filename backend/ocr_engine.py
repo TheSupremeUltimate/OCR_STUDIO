@@ -17,7 +17,7 @@ import math
 import os
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional
@@ -30,7 +30,7 @@ from pypdf import PdfReader
 logger = logging.getLogger("ocr_studio.engine")
 
 # Temperature values for retry attempts (from OlmOCR)
-TEMPERATURE_BY_ATTEMPT = [0.1, 0.7, 0.8, 0.9, 1.0]
+TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 1.0]
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +157,58 @@ def render_pdf_to_base64png(
 # Prompt building (adapted from OlmOCR prompts.py)
 # ---------------------------------------------------------------------------
 
+def parse_glossary(custom_glossary: str):
+    """
+    Split a custom_glossary string into standard terms and correction pairs.
+
+    The string may be comma- or newline-separated (it arrives comma-joined from
+    load_glossary_terms, or multiline/comma-separated from the UI textarea).
+    An entry containing '->' is a correction pair 'BAD -> GOOD' (whitespace
+    around the delimiter is ignored, so '木義->本義' and '木義 -> 本義' are
+    equivalent). Any other non-empty entry is a standard term. A literal
+    standard term must therefore not contain '->'.
+
+    Returns (standard_terms, correction_pairs) where correction_pairs is a list
+    of (bad, good) tuples.
+    """
+    standard_terms = []
+    correction_pairs = []
+    for entry in custom_glossary.replace(",", "\n").splitlines():
+        # Strip inline comments starting with '#'
+        entry_no_comment = entry.split("#", 1)[0]
+        token = entry_no_comment.strip()
+        if not token:
+            continue
+        if "->" in token:
+            bad, good = token.split("->", 1)
+            bad, good = bad.strip(), good.strip()
+            if bad and good:
+                correction_pairs.append((bad, good))
+        else:
+            standard_terms.append(token)
+    return standard_terms, correction_pairs
+
+
+def apply_corrections(text: str, correction_pairs) -> str:
+    """
+    Deterministically rewrite known glyph misreads in OCR output (Phase 4.16).
+
+    Applies each (bad, good) pair as an exact string replacement. The 7B VLM
+    cannot self-correct vision-encoder-level misreads (empirically confirmed in
+    Phase 4.15), so this runs after OCR as a guaranteed net.
+
+    Best practice: use EQUAL-LENGTH pairs (e.g. 木義->本義, 畫夜->晝夜). Corrections
+    are applied after token-logprob alignment, so equal-length swaps preserve the
+    frontend heatmap's character-position indices. Idempotent and safe on empty input.
+    """
+    if not text or not correction_pairs:
+        return text
+    for bad, good in correction_pairs:
+        if bad:
+            text = text.replace(bad, good)
+    return text
+
+
 def build_prompt(
     custom_glossary: str = "",
     strict_mode: bool = False,
@@ -183,7 +235,11 @@ def build_prompt(
             f"Do not repeat the context text in your response."
         )
     if custom_glossary and custom_glossary.strip():
-        appends.append(f"This text contains document-specific terms/proper nouns. Prioritize matching these sequences visually: {custom_glossary.strip()}")
+        # Correction pairs are handled deterministically post-OCR (Phase 4.16),
+        # not injected here — negative prompting proved ineffective (Phase 4.15).
+        standard_terms, _ = parse_glossary(custom_glossary)
+        if standard_terms:
+            appends.append(f"This text contains document-specific terms/proper nouns. Prioritize matching these sequences visually: {', '.join(standard_terms)}")
     if strict_mode:
         appends.append("Do not modernize characters, do not correct perceived historical typos, and do not fill in gaps. Provide an exact 1:1 digital twin of the glyphs present.")
     if reading_direction == "Vertical RTL":
@@ -248,6 +304,9 @@ async def build_page_query(
         ],
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "repeat_penalty": 1.0,
         "logprobs": True,
         "top_logprobs": 5,
     }
@@ -337,6 +396,7 @@ async def process_single_page(
     completion_url = f"{server_url.rstrip('/')}/chat/completions"
     current_target_dim = target_dim
     controlled_retries = 0
+    correction_pairs = parse_glossary(custom_glossary)[1]
 
     for attempt in range(max_retries + 1):
         effective_temp_idx = max(0, attempt - controlled_retries)
@@ -375,7 +435,7 @@ async def process_single_page(
             if finish_reason != "stop":
                 logger.warning("Incomplete response for page %d attempt %d (reason: %s)", page_num, attempt, finish_reason)
                 if finish_reason == "length":
-                    max_tokens = min(max_tokens + 1000, 4096)
+                    max_tokens = min(max_tokens + 2000, 14000)
                     controlled_retries += 1
                     logger.info("Page %d hit token limit. Increasing max_tokens to %d for next attempt.", page_num, max_tokens)
                 continue
@@ -447,6 +507,20 @@ async def process_single_page(
                                 "confidence": prob,
                                 "top_logprobs": top_lps
                             })
+
+            # Deterministic post-OCR correction (Phase 4.16): rewrite known glyph
+            # misreads the VLM cannot self-correct. Applied after logprob alignment
+            # so equal-length pairs keep heatmap indices valid; feeds corrected text
+            # into consensus voting, stitching, disk cache, exports, and the UI.
+            if page_response.natural_text and correction_pairs:
+                logger.info("Page %d: Before corrections (first 100 chars): %r", page_num, page_response.natural_text[:100])
+                corrected = apply_corrections(page_response.natural_text, correction_pairs)
+                if corrected != page_response.natural_text:
+                    logger.info("Page %d: Corrections applied! After (first 100 chars): %r", page_num, corrected[:100])
+                    # PageResponse is a frozen dataclass — rebuild rather than mutate.
+                    page_response = replace(page_response, natural_text=corrected)
+                else:
+                    logger.info("Page %d: No corrections were applied (text did not change).", page_num)
 
             # --- DYNAMIC SELF-CORRECTION & SMART RETRIES ---
 
@@ -664,6 +738,9 @@ async def process_pdf_to_markdown(
     max_retries = settings.get("max_page_retries", 1)
     page_range_str = settings.get("page_range", "")
     custom_glossary = settings.get("custom_glossary", "")
+    correction_pairs = parse_glossary(custom_glossary)[1]
+    logger.info("Loaded custom_glossary length: %d chars", len(custom_glossary))
+    logger.info("Parsed correction_pairs for job: %s", correction_pairs)
     strict_mode = settings.get("strict_mode", False)
     reading_direction = settings.get("reading_direction", "Default")
     document_structure = settings.get("document_structure", "Standard")
@@ -717,6 +794,9 @@ async def process_pdf_to_markdown(
             if page_file.exists() and page_file.stat().st_size > 10:
                 logger.info("Resuming page %d from cache: %s", page_num, page_file.name)
                 text = page_file.read_text(encoding="utf-8")
+                # Apply post-OCR corrections to cached text too (Phase 4.16): a page
+                # cached before a correction pair existed must not resurrect the misread.
+                text = apply_corrections(text, correction_pairs)
                 result = PageResult(
                     page_num=page_num,
                     response=PageResponse(
@@ -1019,9 +1099,19 @@ def vote_consensus(s1: str, s2: str, s3: str) -> str:
     s1_a, s2_a = align_strings(s1, s2)
     # Step 2: Align s3 to the aligned s1 (s1_a) to capture s3 insertions
     s1_ab, s3_a = align_strings(s1_a, s3)
-    # Step 3: Propagate s3's insertions back into s2_a
-    _, s2_ab = align_strings(s1_a, s2_a)
-    
+    # Step 3: Re-align s2 against the s3-EXPANDED reference (s1_ab), not the old
+    # s1_a. Aligning to s1_a left s2_ab shorter than s1_ab/s3_a, so the zip()
+    # below truncated the vote to the shortest row and silently dropped trailing
+    # text / chose minority glyphs (H-2, wargame 01-bugs).
+    _, s2_ab = align_strings(s1_ab, s2_a)
+
+    # Pad every row to the max aligned length so the vote loop never drops
+    # trailing characters (zip stops at the shortest row).
+    max_len = max(len(s1_ab), len(s2_ab), len(s3_a))
+    s1_ab = s1_ab.ljust(max_len, '-')
+    s2_ab = s2_ab.ljust(max_len, '-')
+    s3_a = s3_a.ljust(max_len, '-')
+
     # Step 4: Character voting
     consensus_chars = []
     for c1, c2, c3 in zip(s1_ab, s2_ab, s3_a):
@@ -1053,8 +1143,8 @@ async def run_consensus_ocr(
     despeckle: bool,
 ) -> PageResult:
     """Run three concurrent OCR passes at different dimensions and vote consensus."""
-    logger.info("Page %d: Starting Consensus Mode (768px, 1024px, 2048px concurrent passes)", page_num)
-    
+    dims = [1600, 2048, 2400] if reading_direction == "Vertical RTL" else [768, 1288, 2048]
+    logger.info("Page %d: Starting Consensus Mode with dimensions %s concurrent passes", page_num, dims)
     tasks = [
         process_single_page(
             http_client, pdf_path, page_num, server_url, model,
@@ -1062,7 +1152,7 @@ async def run_consensus_ocr(
             reading_direction, previous_page_context, document_structure,
             binarize, high_contrast, despeckle, skip_consensus_check=True
         )
-        for dim in [768, 1024, 2048]
+        for dim in dims
     ]
     
     results = await asyncio.gather(*tasks)
@@ -1086,7 +1176,7 @@ async def run_consensus_ocr(
     consensus_text = vote_consensus(text1, text2, text3)
     avg_conf = round(sum(r.confidence_score or 0 for r in success_results) / 3, 1)
     
-    base_result = r2  # 1024px pass as base metadata
+    base_result = r2  # 1288px pass as base metadata
     merged_response = PageResponse(
         primary_language=base_result.response.primary_language,
         is_rotation_valid=base_result.response.is_rotation_valid,
@@ -1105,7 +1195,12 @@ async def run_consensus_ocr(
         success=True,
         confidence_score=avg_conf,
         attempts_taken=max(r.attempts_taken for r in success_results),
-        token_logprobs=base_result.token_logprobs
+        # Return None (not the base r2 pass's stream): the editor renders from the
+        # token stream when present, which would display r2's raw glyphs and revert
+        # the consensus vote on autosave. With None, the UI renders the voted
+        # natural_text (p.content) instead. Heatmap is lost for consensus pages
+        # only — acceptable (H-5, wargame 01-bugs).
+        token_logprobs=None
     )
 
 

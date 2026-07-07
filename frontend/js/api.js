@@ -165,3 +165,21 @@ export async function getModels() {
   return handleResponse(res);
 }
 
+/**
+ * Fetch available glossary preset names
+ * GET /api/glossaries
+ */
+export async function getGlossaries() {
+  const res = await fetch(`${BASE_URL}/glossaries`);
+  return handleResponse(res);
+}
+
+/**
+ * Fetch a single glossary preset's injectable terms + raw annotated text
+ * GET /api/glossaries/{name}
+ */
+export async function getGlossary(name) {
+  const res = await fetch(`${BASE_URL}/glossaries/${encodeURIComponent(name)}`);
+  return handleResponse(res);
+}
+

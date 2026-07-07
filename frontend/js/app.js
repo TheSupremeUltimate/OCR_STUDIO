@@ -8,6 +8,10 @@ import { connectWs } from './websocket.js';
 
 // Application State
 let currentJobId = null;
+// Job id of the document CURRENTLY shown in Results. Distinct from currentJobId,
+// which job_start reassigns to a newly-queued batch job — using that global for a
+// zone re-run would OCR the wrong document into the viewed one (H-8, wargame 01-bugs).
+let currentResultsJobId = null;
 let currentOutputFilename = null;
 let appSettings = {};
 const ignoredJobIds = new Set();
@@ -34,6 +38,14 @@ let panStartY = 0;
 // Markdown Preview Font Zoom State
 let mdZoomScale = 1.0;
 
+// Active translation cancellation handle. Set while a translation stream is in
+// flight so the Cancel button can abort the fetch; null otherwise.
+let translateAbortController = null;
+
+// localStorage key for the learned translation throughput (input chars/sec),
+// used to show an ETA immediately on subsequent runs.
+const TRANSLATE_CPS_KEY = 'ocrstudio.translateCharsPerSec';
+
 // DOM Elements cache
 const DOM = {
   // Views
@@ -53,10 +65,12 @@ const DOM = {
   selectModel: document.getElementById('select-model'),
   inputWorkers: document.getElementById('input-workers'),
   inputPagesGroup: document.getElementById('input-pages-group'),
+  inputMaxTokens: document.getElementById('input-max-tokens'),
   selectImgDim: document.getElementById('select-img-dim'),
   inputOutputDir: document.getElementById('input-output-dir'),
   inputPageRange: document.getElementById('input-page-range'),
   inputCustomGlossary: document.getElementById('input-custom-glossary'),
+  selectGlossaryPreset: document.getElementById('select-glossary-preset'),
   inputStrictMode: document.getElementById('input-strict-mode'),
   selectReadingDirection: document.getElementById('select-reading-direction'),
   selectDocumentStructure: document.getElementById('select-document-structure'),
@@ -102,6 +116,7 @@ const DOM = {
   btnResultsDownloadHtml: document.getElementById('btn-results-download-html'),
   btnResultsNew: document.getElementById('btn-results-new'),
   btnResultsTranslate: document.getElementById('btn-results-translate'),
+  btnResultsCancelTranslate: document.getElementById('btn-results-cancel-translate'),
   zoneCanvas: document.getElementById('zone-canvas'),
   btnRerunZone: document.getElementById('btn-rerun-zone'),
   previewZoomWrapper: document.getElementById('preview-zoom-wrapper'),
@@ -216,7 +231,8 @@ async function loadSettings() {
     DOM.inputServer.value = appSettings.server_url || '';
     DOM.inputWorkers.value = appSettings.workers || 4;
     DOM.inputPagesGroup.value = appSettings.pages_per_group || 20;
-    DOM.selectImgDim.value = appSettings.target_longest_image_dim || 1024;
+    DOM.inputMaxTokens.value = appSettings.max_tokens || 8000;
+    DOM.selectImgDim.value = appSettings.target_longest_image_dim || 1288;
     DOM.inputPageRange.value = appSettings.page_range || '';
     DOM.inputCustomGlossary.value = appSettings.custom_glossary || '';
     DOM.inputStrictMode.checked = !!appSettings.strict_mode;
@@ -230,8 +246,31 @@ async function loadSettings() {
     // Dynamically populate model dropdown
     await populateModelsDropdown(appSettings.model, appSettings.translation_model);
 
+    // Populate glossary preset dropdown
+    await populateGlossaryPresets();
+
   } catch (err) {
     console.error('Failed to load settings:', err);
+  }
+}
+
+/**
+ * Populate the glossary preset dropdown from the backend (glossaries/*.txt).
+ */
+async function populateGlossaryPresets() {
+  const sel = DOM.selectGlossaryPreset;
+  if (!sel) return;
+  try {
+    const names = await api.getGlossaries();
+    sel.innerHTML = '<option value="">— Load a preset glossary —</option>';
+    names.forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+  } catch (err) {
+    console.error('Failed to load glossary presets:', err);
   }
 }
 
@@ -246,6 +285,7 @@ async function saveSettings(e) {
     translation_model: document.getElementById('select-translation-model')?.value ? document.getElementById('select-translation-model').value.trim() : '',
     workers: parseInt(DOM.inputWorkers.value, 10),
     pages_per_group: parseInt(DOM.inputPagesGroup.value, 10),
+    max_tokens: parseInt(DOM.inputMaxTokens.value, 10),
     target_longest_image_dim: parseInt(DOM.selectImgDim.value, 10),
     output_dir: DOM.inputOutputDir.value.trim(),
     page_range: DOM.inputPageRange.value.trim(),
@@ -528,17 +568,17 @@ function setupDragAndDrop() {
 
   DOM.dropZone.addEventListener('drop', (e) => {
     const dt = e.dataTransfer;
-    const pdfFiles = Array.from(dt.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    const pdfFiles = Array.from(dt.files).filter(f => f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.md'));
     if (pdfFiles.length > 0) {
       handlePdfFiles(pdfFiles);
     } else {
-      alert('Only PDF files are accepted.');
+      alert('Only PDF or Markdown files are accepted.');
     }
   });
 
   DOM.btnBrowse.addEventListener('click', () => DOM.fileInput.click());
   DOM.fileInput.addEventListener('change', (e) => {
-    const pdfFiles = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    const pdfFiles = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.md'));
     if (pdfFiles.length > 0) {
       handlePdfFiles(pdfFiles);
     }
@@ -551,7 +591,7 @@ function setupDragAndDrop() {
 async function handlePdfFiles(files) {
   try {
     DOM.dropZone.style.pointerEvents = 'none';
-    DOM.dropZone.querySelector('h3').textContent = `Uploading ${files.length} PDF(s)...`;
+    DOM.dropZone.querySelector('h3').textContent = `Uploading ${files.length} document(s)...`;
     DOM.dropZone.querySelector('p').textContent = 'Please wait while we stage your documents';
     
     let firstJobId = null;
@@ -559,6 +599,12 @@ async function handlePdfFiles(files) {
     for (const file of files) {
       // 1. Upload file
       const uploadRes = await api.uploadPdf(file);
+      
+      if (uploadRes.status === 'completed') {
+        // Markdown file uploaded and parsed immediately
+        showResults(uploadRes.pdf_filename, uploadRes.output_filename);
+        continue;
+      }
       
       // 2. Queue OCR job using current settings overrides
       const jobConfig = {
@@ -595,7 +641,7 @@ async function handlePdfFiles(files) {
   } finally {
     // Reset drop zone state
     DOM.dropZone.style.pointerEvents = 'auto';
-    DOM.dropZone.querySelector('h3').textContent = 'Drag & Drop PDF here';
+    DOM.dropZone.querySelector('h3').textContent = 'Drag & Drop PDF or Markdown here';
     DOM.dropZone.querySelector('p').textContent = 'or click to browse from your computer';
     DOM.fileInput.value = '';
   }
@@ -605,11 +651,24 @@ async function handlePdfFiles(files) {
  * Display final results
  */
 async function showResults(pdfFilename, outputFilename) {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
   currentOutputFilename = outputFilename;
   currentPdfFilename = pdfFilename;
   pageConfidenceMap = {}; // Reset confidence scores for new preview
+
+  // A sideloaded .md file has no source PDF, so the left preview pane would be
+  // blank and waste half the screen. Collapse to an editor-only layout via the
+  // CSS .markdown-only-mode class. Toggling on every showResults() call means
+  // opening a .pdf later automatically resets back to the split layout.
+  const isMarkdownOnly = typeof pdfFilename === 'string' && pdfFilename.toLowerCase().endsWith('.md');
+  const splitGrid = document.querySelector('.results-split-grid');
+  if (splitGrid) splitGrid.classList.toggle('markdown-only-mode', isMarkdownOnly);
+
   DOM.resultStatusLabel.textContent = `Successfully generated Markdown for ${pdfFilename}`;
-  DOM.txtMarkdownPreview.value = 'Loading preview content...';
+  DOM.txtMarkdownPreview.textContent = 'Loading preview content...';
   showView('view-results');
 
   try {
@@ -617,7 +676,10 @@ async function showResults(pdfFilename, outputFilename) {
     try {
       const jobs = await api.getRecentJobs();
       matchingJob = jobs.find(j => j.output_filename === outputFilename);
-      
+      // Pin the results-scoped job id so a zone re-run always targets THIS
+      // document, even if a batch job starts and reassigns currentJobId (H-8).
+      currentResultsJobId = matchingJob ? matchingJob.job_id : null;
+
       // Render Job-Level Analytics diagnostics summary
       if (matchingJob) {
         if (matchingJob.total_runtime !== undefined && matchingJob.total_runtime !== null) {
@@ -664,7 +726,7 @@ async function showResults(pdfFilename, outputFilename) {
     }
 
     // Fetch file text content directly using the download endpoint
-    const fileUrl = `/api/download/${encodeURIComponent(outputFilename)}`;
+    const fileUrl = `/api/download/${encodeURIComponent(outputFilename)}?t=${Date.now()}`;
     const res = await fetch(fileUrl);
     if (res.ok) {
       const markdown = await res.text();
@@ -681,33 +743,46 @@ async function showResults(pdfFilename, outputFilename) {
         block.className = 'ocr-page-block';
         block.setAttribute('data-page', p.page_num);
 
-        const header = document.createElement('div');
-        header.className = 'ocr-page-header';
-        header.setAttribute('contenteditable', 'false');
-        header.textContent = `<!-- PAGE ${String(p.page_num).padStart(3, '0')} -->`;
-
         const contentDiv = document.createElement('div');
         contentDiv.className = 'ocr-page-content';
         contentDiv.setAttribute('contenteditable', 'true');
-        
+
         const logprobs = activeJobTokenLogprobs[p.page_num] || activeJobTokenLogprobs[String(p.page_num)];
         contentDiv.innerHTML = renderPageContentHTML(p.content, logprobs);
 
         contentDiv.addEventListener('input', triggerAutoSave);
 
-        block.appendChild(header);
+        // Preamble (TOC) block carries no page header (H-1); everything else does.
+        if (p.isPreamble) {
+          block.classList.add('ocr-preamble-block');
+        } else {
+          const header = document.createElement('div');
+          header.className = 'ocr-page-header';
+          header.setAttribute('contenteditable', 'false');
+          header.textContent = `<!-- PAGE ${String(p.page_num).padStart(3, '0')} -->`;
+          block.appendChild(header);
+        }
+
         block.appendChild(contentDiv);
         DOM.txtMarkdownPreview.appendChild(block);
       });
 
-      const markerRegex = /<!-- PAGE (\d{3}) -->/g;
+      const markerRegex = /<!-- PAGE (\d{3,}) -->/g;
       let match;
       previewPagesList = [];
       while ((match = markerRegex.exec(markdown)) !== null) {
         previewPagesList.push(parseInt(match[1], 10));
       }
 
-      if (previewPagesList.length > 0) {
+      if (isMarkdownOnly) {
+        // Editor-only layout: the PDF pane is hidden, so skip the page-image
+        // fetch entirely (there is no source PDF; /api/pdf/<name>.md would 404).
+        // previewPagesList is already populated from the markers above.
+        if (previewPagesList.length === 0) previewPagesList = [1];
+        previewTotalPages = Math.max(...previewPagesList);
+        previewCurrentPage = 0;
+        DOM.txtPreviewPageLabel.textContent = '—';
+      } else if (previewPagesList.length > 0) {
         previewTotalPages = Math.max(...previewPagesList);
         previewCurrentPage = 0;
         loadPreviewPage(0);
@@ -847,6 +922,21 @@ function bindEvents() {
   });
   DOM.formSettings.addEventListener('submit', saveSettings);
 
+  // Glossary preset loader — populate the Custom Glossary textarea on selection
+  if (DOM.selectGlossaryPreset) {
+    DOM.selectGlossaryPreset.addEventListener('change', async (e) => {
+      const name = e.target.value;
+      if (!name) return;
+      try {
+        const preset = await api.getGlossary(name);
+        DOM.inputCustomGlossary.value = preset.raw || '';
+      } catch (err) {
+        console.error('Failed to load glossary preset:', err);
+        alert(`Failed to load glossary: ${err.message}`);
+      }
+    });
+  }
+
   // Cancel Job (Reset UI state and abort backend task)
   DOM.btnCancelProcessing.addEventListener('click', async () => {
     if (confirm('Are you sure you want to cancel this OCR job?')) {
@@ -887,54 +977,145 @@ function bindEvents() {
 
   DOM.btnResultsTranslate.addEventListener('click', async () => {
     if (!currentOutputFilename) return;
-    
-    DOM.btnResultsTranslate.disabled = true;
-    DOM.btnResultsTranslate.textContent = 'Translating...';
-    
+
+    // Fresh abort handle for this run; swap the Translate button for a red
+    // Cancel button so the user has an escape hatch during the long chunk loop.
+    translateAbortController = new AbortController();
+    DOM.btnResultsTranslate.classList.add('is-hidden');
+    DOM.btnResultsCancelTranslate.classList.remove('is-hidden');
+    DOM.btnResultsCancelTranslate.disabled = false;
+    DOM.btnResultsCancelTranslate.textContent = 'Cancel Translation';
+    // The Translate button is hidden during the run, so live progress must go to
+    // the prominent status label. A 1-second ticker keeps the elapsed time (and,
+    // once known, the ETA) moving even while a single slow chunk is in flight, so
+    // the UI never looks frozen during the long first LM Studio call.
+    const translateStartTime = Date.now();
+    let progCurrent = 0, progTotal = 0, progPct = null;
+    let etaSnapshotSec = null, etaSnapshotAt = 0;
+    let totalInputChars = 0;
+    // Throughput (input chars/sec) learned from previous successful runs, so an
+    // estimate can be shown immediately — before any chunk completes, and even
+    // for single-chunk documents. null on the very first run.
+    const priorCharsPerSec = parseFloat(localStorage.getItem(TRANSLATE_CPS_KEY)) || null;
+
+    const renderTranslateStatus = () => {
+      if (!progTotal) {
+        DOM.resultStatusLabel.textContent = 'Translating… preparing chunks.';
+        return;
+      }
+      const elapsedSec = Math.floor((Date.now() - translateStartTime) / 1000);
+      let timeText;
+      if (etaSnapshotSec !== null) {
+        // Measured: count the per-chunk snapshot down until the next chunk resnapshots it.
+        const remaining = Math.max(0, Math.round(etaSnapshotSec - (Date.now() - etaSnapshotAt) / 1000));
+        timeText = remaining > 0
+          ? `~${formatEta(remaining)} left · ${formatEta(elapsedSec)} elapsed`
+          : `finishing up · ${formatEta(elapsedSec)} elapsed`;
+      } else if (priorCharsPerSec && totalInputChars) {
+        // Provisional: no chunk has completed yet, but a throughput prior from a
+        // previous run lets us show an estimate right away (marked "est.").
+        const totalEstSec = totalInputChars / priorCharsPerSec;
+        const remaining = Math.max(0, Math.round(totalEstSec - (Date.now() - translateStartTime) / 1000));
+        timeText = remaining > 0
+          ? `~${formatEta(remaining)} left (est.) · ${formatEta(elapsedSec)} elapsed`
+          : `finishing up · ${formatEta(elapsedSec)} elapsed`;
+      } else {
+        // First-ever run, still on chunk 1: no basis to estimate yet, but show
+        // elapsed so the user can see it is actively working.
+        timeText = `${formatEta(elapsedSec)} elapsed · estimating…`;
+      }
+      const pctText = (progPct !== undefined && progPct !== null) ? ` (${progPct}%)` : '';
+      DOM.resultStatusLabel.textContent = `Translating chunk ${progCurrent} of ${progTotal}${pctText} · ${timeText}`;
+    };
+
+    renderTranslateStatus();
+    const translateTicker = setInterval(renderTranslateStatus, 1000);
+
     await forceSave();
     const text = getMarkdownText();
-    
+    totalInputChars = text.length;  // enables the provisional (prior-based) ETA
+
     try {
-      const response = await fetch('/api/jobs/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text })
-      });
-      
-      if (!response.ok) {
-        throw new Error(await response.text());
+      const translatedText = await consumeTranslateStream(text, (current, total, pct) => {
+        progCurrent = current; progTotal = total; progPct = pct;
+        // A new chunk just started, so `current - 1` chunks have completed. Snapshot
+        // the mean per-chunk time as the remaining estimate; the ticker counts it
+        // down until the next chunk starts and resnapshots.
+        const done = current - 1;
+        if (done >= 1) {
+          const elapsedSec = (Date.now() - translateStartTime) / 1000;
+          etaSnapshotSec = Math.round((elapsedSec / done) * (total - done));
+          etaSnapshotAt = Date.now();
+        } else {
+          etaSnapshotSec = null;
+        }
+        renderTranslateStatus();
+      }, translateAbortController.signal);
+
+      // Learn throughput from this successful run so future runs can show an
+      // instant estimate. EWMA-blend with any prior to smooth run-to-run noise.
+      const totalElapsedSec = (Date.now() - translateStartTime) / 1000;
+      if (totalInputChars > 0 && totalElapsedSec > 1) {
+        const cps = totalInputChars / totalElapsedSec;
+        const blended = priorCharsPerSec ? (priorCharsPerSec * 0.5 + cps * 0.5) : cps;
+        try { localStorage.setItem(TRANSLATE_CPS_KEY, String(blended)); } catch (e) { /* ignore */ }
       }
-      
-      const result = await response.json();
-      
+
+      // Save the translation to a SEPARATE file so the Chinese source (already
+      // persisted by the forceSave above) is never overwritten (H-9). The
+      // subsequent forceSave and all downloads now target the _EN.md file.
+      currentOutputFilename = translationFilename(currentOutputFilename);
+      DOM.resultStatusLabel.textContent = `Translated document saved as ${currentOutputFilename}`;
+
       DOM.txtMarkdownPreview.innerHTML = '';
       const block = document.createElement('div');
       block.className = 'ocr-page-block';
       block.setAttribute('data-page', '1');
-      
+
       const header = document.createElement('div');
       header.className = 'ocr-page-header';
       header.setAttribute('contenteditable', 'false');
       header.textContent = `<!-- TRANSLATED DOCUMENT (English) -->`;
-      
+
       const contentDiv = document.createElement('div');
       contentDiv.className = 'ocr-page-content';
       contentDiv.setAttribute('contenteditable', 'true');
-      contentDiv.textContent = result.translated_text;
-      
+      contentDiv.textContent = translatedText;
+
       contentDiv.addEventListener('input', triggerAutoSave);
-      
+
       block.appendChild(header);
       block.appendChild(contentDiv);
       DOM.txtMarkdownPreview.appendChild(block);
-      
+
       await forceSave();
       alert('Document translated successfully!');
     } catch (err) {
-      alert(`Translation failed: ${err.message}`);
+      if (err.name === 'AbortError') {
+        // User cancelled: leave the Chinese source untouched (we never switched
+        // currentOutputFilename to _EN.md), so no partial translation is saved.
+        DOM.resultStatusLabel.textContent = 'Translation cancelled.';
+      } else {
+        alert(`Translation failed: ${err.message}`);
+      }
     } finally {
+      clearInterval(translateTicker);
+      translateAbortController = null;
+      DOM.btnResultsCancelTranslate.classList.add('is-hidden');
+      DOM.btnResultsTranslate.classList.remove('is-hidden');
       DOM.btnResultsTranslate.disabled = false;
       DOM.btnResultsTranslate.textContent = 'Translate to English';
+    }
+  });
+
+  // Cancel an in-flight translation by aborting the stream fetch. The reader in
+  // consumeTranslateStream rejects with AbortError, which the handler above
+  // resolves to a clean UI reset (no partial save).
+  DOM.btnResultsCancelTranslate.addEventListener('click', () => {
+    if (translateAbortController) {
+      DOM.btnResultsCancelTranslate.disabled = true;
+      DOM.btnResultsCancelTranslate.textContent = 'Cancelling...';
+      translateAbortController.abort();
     }
   });
 
@@ -1024,13 +1205,15 @@ function resizeCanvasToImage() {
 }
 
 function parseMarkdownIntoPages(markdown) {
-  const pageRegex = /<!-- PAGE (\d{3}) -->/g;
+  const pageRegex = /<!-- PAGE (\d{3,}) -->/g;
   const pages = [];
   let match;
   let lastIndex = 0;
   let lastPageNum = null;
+  let firstMarkerIndex = -1;
 
   while ((match = pageRegex.exec(markdown)) !== null) {
+    if (firstMarkerIndex === -1) firstMarkerIndex = match.index;
     if (lastPageNum !== null) {
       pages.push({
         page_num: lastPageNum,
@@ -1048,6 +1231,16 @@ function parseMarkdownIntoPages(markdown) {
     });
   }
 
+  // Preserve any preamble before the first page marker (e.g. the generated
+  // Table of Contents) as a headerless block, so an edit->autosave round-trip
+  // cannot silently drop it (H-1, wargame 01-bugs).
+  if (firstMarkerIndex > 0) {
+    const preamble = markdown.substring(0, firstMarkerIndex);
+    if (preamble.trim()) {
+      pages.unshift({ page_num: 0, content: preamble, isPreamble: true });
+    }
+  }
+
   if (pages.length === 0 && markdown.trim()) {
     pages.push({
       page_num: 1,
@@ -1058,13 +1251,86 @@ function parseMarkdownIntoPages(markdown) {
   return pages;
 }
 
+function applyCorrectionsToTokens(tokenLogprobs, pairs) {
+  if (!pairs || pairs.length === 0) return tokenLogprobs;
+  
+  let fullText = '';
+  const tokenIndices = [];
+  
+  tokenLogprobs.forEach((item, tIdx) => {
+    const tStr = item.token || '';
+    for (let c = 0; c < tStr.length; c++) {
+      tokenIndices.push({ tokenIndex: tIdx, charInToken: c });
+    }
+    fullText += tStr;
+  });
+  
+  pairs.forEach(pair => {
+    const { bad, good } = pair;
+    if (!bad || !good) return;
+    
+    let searchIdx = 0;
+    while (true) {
+      const foundIdx = fullText.indexOf(bad, searchIdx);
+      if (foundIdx === -1) break;
+      
+      if (bad.length === good.length) {
+        for (let i = 0; i < bad.length; i++) {
+          const targetChar = good[i];
+          const map = tokenIndices[foundIdx + i];
+          if (map) {
+            const tokenItem = tokenLogprobs[map.tokenIndex];
+            const tokenStr = tokenItem.token;
+            tokenItem.token = tokenStr.substring(0, map.charInToken) + targetChar + tokenStr.substring(map.charInToken + 1);
+          }
+        }
+      } else {
+        const mapStart = tokenIndices[foundIdx];
+        const mapEnd = tokenIndices[foundIdx + bad.length - 1];
+        
+        if (mapStart && mapEnd) {
+          for (let i = 0; i < bad.length; i++) {
+            const map = tokenIndices[foundIdx + i];
+            if (map) {
+              const tokenItem = tokenLogprobs[map.tokenIndex];
+              tokenItem.token = '';
+            }
+          }
+          const firstTokenItem = tokenLogprobs[mapStart.tokenIndex];
+          firstTokenItem.token = good;
+        }
+      }
+      
+      searchIdx = foundIdx + bad.length;
+    }
+  });
+  
+  return tokenLogprobs;
+}
+
 function renderPageContentHTML(text, tokenLogprobs) {
   if (!tokenLogprobs || tokenLogprobs.length === 0) {
     return escapeHtml(text);
   }
 
+  const pairs = [];
+  if (appSettings && appSettings.custom_glossary) {
+    appSettings.custom_glossary.split(/[\n,]+/).forEach(line => {
+      const entry = line.split('#')[0].trim();
+      if (entry.includes('->')) {
+        const [bad, good] = entry.split('->');
+        if (bad.trim() && good.trim()) {
+          pairs.push({ bad: bad.trim(), good: good.trim() });
+        }
+      }
+    });
+  }
+
+  const clonedLogprobs = JSON.parse(JSON.stringify(tokenLogprobs));
+  const correctedLogprobs = applyCorrectionsToTokens(clonedLogprobs, pairs);
+
   let html = '';
-  tokenLogprobs.forEach(item => {
+  correctedLogprobs.forEach(item => {
     const tokenStr = item.token;
     const confidence = item.confidence;
     const topLogprobs = item.top_logprobs || [];
@@ -1098,9 +1364,15 @@ function getMarkdownText() {
 
   const pagesText = [];
   blocks.forEach(block => {
-    const header = block.querySelector('.ocr-page-header');
     const content = block.querySelector('.ocr-page-content');
-    if (header && content) {
+    if (!content) return;
+    // Preamble block (TOC) round-trips verbatim, with no synthetic PAGE header (H-1).
+    if (block.classList.contains('ocr-preamble-block')) {
+      pagesText.push(content.textContent || '');
+      return;
+    }
+    const header = block.querySelector('.ocr-page-header');
+    if (header) {
       // Use textContent instead of innerText to preserve spacing/indentation exactly as approved.
       const pageText = content.textContent || '';
       pagesText.push(`${header.textContent}\n${pageText}\n\n`);
@@ -1108,6 +1380,93 @@ function getMarkdownText() {
   });
 
   return pagesText.join('');
+}
+
+/**
+ * Derive the filename for a translated document so translation is saved to a
+ * SEPARATE file instead of overwriting the Chinese OCR source (H-1/H-9). Idempotent.
+ */
+function translationFilename(src) {
+  if (!src) return src;
+  if (/_EN\.md$/i.test(src)) return src;      // already a translation target
+  return src.replace(/\.md$/i, '_EN.md');
+}
+
+/**
+ * POST text to the SSE translation endpoint and consume the event stream.
+ * Invokes onProgress(current, total, pct) for each "processing" event, returns
+ * the final translated_text on "completed", and throws on "error" — the backend
+ * surfaces failures in-band because the HTTP 200 status is already sent once the
+ * stream begins. Shared by the main Translate button and the zone re-run flow.
+ */
+async function consumeTranslateStream(text, onProgress, signal) {
+  const response = await fetch('/api/jobs/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text }),
+    signal,
+  });
+
+  // A hard failure before streaming starts (e.g. request validation) still
+  // arrives as a normal error response, not a stream.
+  if (!response.ok || !response.body) {
+    throw new Error(await response.text());
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let translatedText = null;
+
+  // Parse one raw SSE record (already split off the buffer) and act on it.
+  // Throws on an "error" event so the caller's catch can surface it.
+  const handleEvent = (rawEvent) => {
+    // Only the "data:" field carries our JSON payload.
+    const dataLine = rawEvent.split('\n').find(l => l.startsWith('data:'));
+    if (!dataLine) return;
+    const jsonStr = dataLine.slice(5).trim();
+    if (!jsonStr) return;
+
+    let evt;
+    try {
+      evt = JSON.parse(jsonStr);
+    } catch (err) {
+      console.error('Failed to parse SSE translation event:', jsonStr, err);
+      return;
+    }
+
+    if (evt.status === 'processing') {
+      if (onProgress) onProgress(evt.current_chunk, evt.total_chunks, evt.progress_pct);
+    } else if (evt.status === 'completed') {
+      translatedText = evt.translated_text || '';
+    } else if (evt.status === 'error') {
+      throw new Error(evt.detail || 'Translation failed');
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE events are delimited by a blank line ("\n\n"). Process every complete
+    // record and keep the trailing partial in the buffer for the next read.
+    let sepIndex;
+    while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+      handleEvent(rawEvent);
+    }
+  }
+
+  // Defensive: flush a final record if the stream closed without a trailing
+  // blank line (some servers omit it on the last event).
+  if (buffer.trim()) handleEvent(buffer);
+
+  if (translatedText === null) {
+    throw new Error('Translation stream ended without a completed event.');
+  }
+  return translatedText;
 }
 
 let saveTimeout = null;
@@ -1498,7 +1857,9 @@ function setupZoningCanvas() {
   }
 
   btnRerun.addEventListener('click', async () => {
-    if (!currentJobId || !zoneCoordinates) return;
+    // Use the results-scoped id (not the mutating global currentJobId) so the
+    // zone re-run OCRs the document being viewed, never a queued batch job (H-8).
+    if (!currentResultsJobId || !zoneCoordinates) return;
     const pageNum = previewPagesList[previewCurrentPage];
     
     btnRerun.disabled = true;
@@ -1509,7 +1870,7 @@ function setupZoningCanvas() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          job_id: currentJobId,
+          job_id: currentResultsJobId,
           page_num: pageNum,
           x: zoneCoordinates.x,
           y: zoneCoordinates.y,
@@ -1529,16 +1890,11 @@ function setupZoningCanvas() {
       if (isTranslated) {
         btnRerun.textContent = 'Translating...';
         try {
-          const transRes = await fetch('/api/jobs/translate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: result.natural_text })
+          textToInsert = await consumeTranslateStream(result.natural_text, (current, total) => {
+            btnRerun.textContent = `Translating chunk ${current} of ${total}...`;
           });
-          if (transRes.ok) {
-            const transJson = await transRes.json();
-            textToInsert = transJson.translated_text;
-          }
         } catch (transErr) {
+          // Non-fatal: fall back to the untranslated zone text (already assigned).
           console.error('Failed to translate reprocessed zone text:', transErr);
         }
       }

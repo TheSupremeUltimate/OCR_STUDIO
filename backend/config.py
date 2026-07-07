@@ -25,9 +25,9 @@ DEFAULTS = {
     "translation_model": "",
     "workers": 2,
     "pages_per_group": 5,
-    "target_longest_image_dim": 768,
-    "max_page_retries": 1,
-    "max_tokens": 1600,
+    "target_longest_image_dim": 1288,
+    "max_page_retries": 4,
+    "max_tokens": 8000,
     "output_dir": "",
     "page_range": "",
     "custom_glossary": "",
@@ -86,6 +86,65 @@ def get_output_dir() -> Path:
 def get_upload_dir() -> Path:
     """Get the active upload directory inside the output directory."""
     return get_output_dir() / "uploads"
+
+
+def resolve_within_base(base: Path, user_filename: str) -> Path:
+    """
+    Safely resolve a user-supplied filename inside a trusted base directory.
+
+    Guards against path traversal (``..\\``, ``../`` and their URL-decoded
+    variants) and absolute-path injection (e.g. ``C:\\Windows\\...``). Returns
+    the resolved absolute Path only if it is contained within ``base``;
+    otherwise raises ``ValueError``.
+    """
+    if not user_filename or not str(user_filename).strip():
+        raise ValueError("Empty filename")
+
+    base_resolved = base.resolve()
+    candidate = (base_resolved / user_filename).resolve()
+
+    if candidate != base_resolved and base_resolved not in candidate.parents:
+        raise ValueError(f"Path escapes base directory: {user_filename!r}")
+
+    return candidate
+
+
+# ---------------------------------------------------------------------------
+# Glossary presets (shippable domain glossaries under glossaries/)
+# ---------------------------------------------------------------------------
+
+def get_glossaries_dir() -> Path:
+    """Directory holding shippable glossary preset files (root-level 'glossaries/')."""
+    return PROJECT_ROOT / "glossaries"
+
+
+def list_glossaries() -> list:
+    """Return sorted stem names of available *.txt glossary presets."""
+    gdir = get_glossaries_dir()
+    if not gdir.exists():
+        return []
+    return sorted(p.stem for p in gdir.glob("*.txt"))
+
+
+def load_glossary_terms(name: str) -> str:
+    """
+    Load a glossary preset by stem name (without .txt) and return its terms as a
+    comma-joined string ready for prompt injection.
+
+    Lines are '#'-comment aware: the term is the text before any inline '#';
+    blank lines and comment-only lines are ignored. Raises ValueError on an
+    invalid/escaping name or a missing file.
+    """
+    path = resolve_within_base(get_glossaries_dir(), f"{name}.txt")
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"Glossary not found: {name!r}")
+
+    terms = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        term = line.split("#", 1)[0].strip()
+        if term:
+            terms.append(term)
+    return ", ".join(terms)
 
 
 def ensure_directories():

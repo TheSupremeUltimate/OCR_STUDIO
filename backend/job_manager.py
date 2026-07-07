@@ -34,6 +34,7 @@ class JobManager:
         self._active_job_id: Optional[str] = None
         self._global_page_times: list[float] = []
         self._websocket_clients: set[WebSocket] = set()
+        self._has_ever_connected: bool = False
         self._lock = asyncio.Lock()
 
     async def start(self):
@@ -79,6 +80,7 @@ class JobManager:
     async def register_client(self, ws: WebSocket):
         """Register a WebSocket client for progress updates."""
         self._websocket_clients.add(ws)
+        self._has_ever_connected = True
         logger.info("WebSocket client connected (%d total)", len(self._websocket_clients))
 
     async def unregister_client(self, ws: WebSocket):
@@ -91,14 +93,24 @@ class JobManager:
     async def _startup_shutdown_check(self):
         """Shut down if no browser client connects within 20 seconds of server startup."""
         await asyncio.sleep(20)
-        if len(self._websocket_clients) == 0:
+        if not self._has_ever_connected:
             logger.info("No UI clients connected during startup grace period. Shutting down OCR Studio...")
             os.kill(os.getpid(), signal.SIGINT)
 
     async def _auto_shutdown_check(self):
-        """Shut down if all UI clients disconnect and remain disconnected for 5 seconds."""
+        """Shut down if all UI clients disconnect and remain disconnected for 5 seconds.
+
+        If a job is still running, DEFER the shutdown by re-arming this check to run
+        again in another 5 s, rather than silently giving up — otherwise the server
+        would never auto-shut-down after the job finishes with the last client gone
+        (H-4 / G-2). Re-arming stops as soon as either a client reconnects or the job
+        completes (then it shuts down)."""
         await asyncio.sleep(5)
         if len(self._websocket_clients) == 0:
+            if self.is_busy():
+                logger.info("Auto-shutdown deferred: a job is running. Re-arming the check.")
+                asyncio.create_task(self._auto_shutdown_check())
+                return
             logger.info("No active UI clients remaining. Shutting down OCR Studio...")
             os.kill(os.getpid(), signal.SIGINT)
 
@@ -110,7 +122,11 @@ class JobManager:
         payload = message.model_dump_json()
         dead_clients = set()
 
-        for ws in self._websocket_clients:
+        # Iterate a snapshot: register_client/unregister_client can mutate
+        # _websocket_clients between the awaits below (a browser connecting or
+        # closing mid-broadcast), which would raise "Set changed size during
+        # iteration" and fail the whole job (H-3, wargame 01-bugs).
+        for ws in list(self._websocket_clients):
             try:
                 await ws.send_text(payload)
             except Exception:
@@ -161,10 +177,23 @@ class JobManager:
             logger.info("Created job %s for %s (%d pages), added to queue", job_id, pdf_filename, total_pages)
             return job_id
 
+    async def register_completed_job(self, job: JobResponse):
+        """Register an already-finished job (e.g. a sideloaded .md that needs no
+        worker) into history under the lock and honoring the bounded-history trim,
+        mirroring create_job so repeated sideloads cannot grow _jobs unbounded (G-1)."""
+        async with self._lock:
+            self._jobs[job.job_id] = job
+            while len(self._jobs) > MAX_JOB_HISTORY:
+                self._jobs.popitem(last=False)
+
     async def _run_job(self, job_id: str, pdf_path: str, settings: dict):
         """Execute an OCR job in the background."""
         job = self._jobs.get(job_id)
         if not job:
+            return
+
+        if job.status == JobStatus.CANCELLED:
+            logger.info("Job %s was cancelled before processing started. Aborting execution.", job_id)
             return
 
         # Update status to processing

@@ -36,11 +36,11 @@ class JobCreateRequest(BaseModel):
     custom_glossary: Optional[str] = Field(None, description="Custom glossary for document-specific terminology")
     strict_mode: Optional[bool] = Field(None, description="Enable strict archival mode (exact 1:1 transcription)")
     reading_direction: Optional[str] = Field(None, description="Reading direction override (Default, Vertical RTL, Horizontal LTR)")
-    document_structure: Optional[str] = Field("Standard", description="Document structure classification (Standard, Main Text + Interline Commentary)")
+    document_structure: Optional[str] = Field(None, description="Document structure classification (Standard, Main Text + Interline Commentary)")
     binarize: Optional[bool] = Field(None, description="Enable binarization filter (B/W)")
     high_contrast: Optional[bool] = Field(None, description="Enable high contrast filter")
     despeckle: Optional[bool] = Field(None, description="Enable despeckle (median filter)")
-    consensus_mode: Optional[bool] = Field(None, description="Enable consensus voting mode (768px, 1024px, 2048px)")
+    consensus_mode: Optional[bool] = Field(None, description="Enable consensus voting mode (768px, 1288px, 2048px)")
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -52,6 +52,7 @@ class SettingsUpdateRequest(BaseModel):
     pages_per_group: Optional[int] = Field(None, ge=1, le=50)
     target_longest_image_dim: Optional[int] = Field(None, ge=256, le=4096)
     max_page_retries: Optional[int] = Field(None, ge=0, le=10)
+    max_tokens: Optional[int] = Field(None, ge=256, le=16000)
     output_dir: Optional[str] = None
     page_range: Optional[str] = None
     custom_glossary: Optional[str] = None
@@ -62,6 +63,11 @@ class SettingsUpdateRequest(BaseModel):
     high_contrast: Optional[bool] = None
     despeckle: Optional[bool] = None
     consensus_mode: Optional[bool] = None
+
+
+class SaveFileRequest(BaseModel):
+    """Request body for saving edited Markdown back to disk (debounced auto-save)."""
+    content: str = Field(..., description="Full Markdown text content to persist")
 
 
 class ZoneReprocessRequest(BaseModel):

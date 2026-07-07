@@ -6,10 +6,7 @@
   <title>OCR Studio</title>
   <!-- Favicon -->
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='url(%23grad)'/><defs><linearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300d4aa'/><stop offset='100%25' stop-color='%230ea5e9'/></linearGradient></defs><text x='16' y='22' font-family='sans-serif' font-weight='900' font-size='18' fill='%230a0e1a' text-anchor='middle'>O</text></svg>">
-  <!-- Google Fonts Link for Inter -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Fonts are self-hosted via @font-face in css/index.css (no external calls) -->
   <!-- Main Stylesheet -->
   <link rel="stylesheet" href="css/index.css">
 </head>
@@ -43,17 +40,17 @@
     <section id="view-dashboard" class="view is-active">
       <header class="view-header">
         <h2>Dashboard</h2>
-        <p class="subtitle">Drag & drop your PDF file to extract clean, structured Markdown.</p>
+        <p class="subtitle">Drag & drop your PDF file to extract Markdown, or upload an existing .md file.</p>
       </header>
       
       <div class="dashboard-grid">
         <!-- Drag & Drop Zone -->
         <div class="drop-zone glass-panel" id="drop-zone">
           <i class="upload-icon">📄</i>
-          <h3>Drag & Drop PDF here</h3>
+          <h3>Drag & Drop PDF or Markdown here</h3>
           <p>or click to browse from your computer</p>
           <button class="btn btn--primary" id="btn-browse">Browse Files</button>
-          <input type="file" id="file-input" accept=".pdf" multiple hidden>
+          <input type="file" id="file-input" accept=".pdf,.md,text/markdown" multiple hidden>
         </div>
 
         <!-- Recent Jobs Side Panel -->
@@ -67,30 +64,7 @@
             </button>
           </h3>
           <ul class="recent-jobs-list" id="recent-jobs-list">
-            <!-- Job 1 -->
-            <li class="job-item">
-              <div class="job-info">
-                <span class="job-name" title="the-complete-i-ching.pdf">the-complete-i-ching.pdf</span>
-                <span class="job-meta">247 pages &bull; 2 hours ago</span>
-              </div>
-              <span class="job-status-badge badge--success">Completed</span>
-            </li>
-            <!-- Job 2 -->
-            <li class="job-item">
-              <div class="job-info">
-                <span class="job-name" title="legge_Iching.pdf">legge_Iching.pdf</span>
-                <span class="job-meta">420 pages &bull; 1 day ago</span>
-              </div>
-              <span class="job-status-badge badge--success">Completed</span>
-            </li>
-            <!-- Job 3 -->
-            <li class="job-item">
-              <div class="job-info">
-                <span class="job-name" title="failed_scan_test.pdf">failed_scan_test.pdf</span>
-                <span class="job-meta">12 pages &bull; 2 days ago</span>
-              </div>
-              <span class="job-status-badge badge--error">Failed</span>
-            </li>
+            <li class="job-item"><span class="job-meta">Loading jobs...</span></li>
           </ul>
         </aside>
       </div>
@@ -133,11 +107,16 @@
           <div class="form-group">
             <label for="select-img-dim">Target Image Dimension</label>
             <select id="select-img-dim" class="form-control">
-              <option value="1024" selected>1024 px (Default)</option>
+              <option value="1288" selected>1288 px (Default)</option>
               <option value="768">768 px</option>
+              <option value="1024">1024 px</option>
               <option value="1536">1536 px</option>
               <option value="2048">2048 px</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label for="input-max-tokens">Max Tokens (per page)</label>
+            <input type="number" id="input-max-tokens" class="form-control" value="8000" min="256" max="16000">
           </div>
           <div class="form-group">
             <label for="input-output-dir">Output Directory</label>
@@ -149,6 +128,9 @@
           </div>
           <div class="form-group">
             <label for="input-custom-glossary">Custom Glossary (Optional)</label>
+            <select id="select-glossary-preset" class="form-control" style="margin-bottom: 8px;">
+              <option value="">— Load a preset glossary —</option>
+            </select>
             <textarea id="input-custom-glossary" class="form-control" placeholder="Specific terms or names to prioritize (one per line or comma-separated)" rows="3"></textarea>
           </div>
           <div class="form-row">
@@ -191,7 +173,7 @@
                 <input type="checkbox" id="input-filter-despeckle">
                 Despeckle
               </label>
-              <label class="checkbox-label" title="Run concurrent passes (768px, 1024px, 2048px) and vote consensus">
+              <label class="checkbox-label" title="Run concurrent passes (768px, 1288px, 2048px) and vote consensus">
                 <input type="checkbox" id="input-consensus-mode">
                 Consensus Mode
               </label>
@@ -380,6 +362,7 @@
         <div class="results-action-bar">
           <button class="btn btn--secondary" id="btn-results-copy">Copy to Clipboard</button>
           <button class="btn btn--secondary" id="btn-results-translate">Translate to English</button>
+          <button class="btn btn--danger is-hidden" id="btn-results-cancel-translate">Cancel Translation</button>
           <button class="btn btn--primary" id="btn-results-download">Download Full Markdown</button>
           <button class="btn btn--secondary" id="btn-results-download-word">Download Word (.docx)</button>
           <button class="btn btn--secondary" id="btn-results-download-html">Download HTML</button>

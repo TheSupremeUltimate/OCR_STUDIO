@@ -3,8 +3,57 @@
  * Designed for modern, aesthetic, and responsive UI.
  */
 
-/* Import Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+/* Self-hosted fonts — no external network calls (fully offline / local-only).
+   Files live in frontend/fonts/; paths are relative to this stylesheet. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('../fonts/inter-latin-300-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/inter-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/inter-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/inter-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../fonts/inter-latin-700-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/fira-code-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/fira-code-latin-500-normal.woff2') format('woff2');
+}
 
 :root {
   /* Colors */
@@ -817,6 +866,23 @@ textarea.form-control {
   .results-split-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Markdown-only mode: a .md file was sideloaded, so there is no source PDF to
+   preview. Collapse the grid to a single column, hide the (blank) PDF pane, and
+   let the editor span the full width and reclaimed vertical space so it is as
+   large as possible. */
+.results-split-grid.markdown-only-mode {
+  grid-template-columns: 1fr;
+}
+
+.results-split-grid.markdown-only-mode .pdf-preview-pane {
+  display: none;
+}
+
+.results-split-grid.markdown-only-mode .markdown-preview-pane {
+  height: calc(100vh - 320px);
+  min-height: 480px;
 }
 
 .pdf-preview-pane {

@@ -1,0 +1,35 @@
+# Cheng-Zhu 周易 (Book of Changes) edition — structural markers & confusable binomes
+# Format: one Chinese term per line. Text after '#' is a human-facing note and is
+# stripped before prompt injection. Blank lines are ignored.
+#
+# Derived from OCR review of docs/TEST_PDFs/page_008.pdf (Phase 4.14 regression baseline).
+
+本義        # Title marker: Zhu Xi's "Original Meaning" commentary (guard vs 木義)
+晝夜        # Binome: day and night (guard vs 畫)
+朱子曰      # Scholar attribution: Zhu Xi
+臨川吳氏曰  # Scholar attribution: Linchuan Wu Cheng
+節齋蔡氏曰  # Scholar attribution: Jiezhai Cai
+雲峯胡氏曰  # Scholar attribution: Yunfeng Hu
+
+# Correction pairs (BAD -> GOOD): force substitution of degraded/misread glyphs.
+# The negative-prompting block instructs the VLM to override its visual encoder.
+木義 -> 本義  # 本 misread as 木 in the "Original Meaning" marker
+畫夜 -> 晝夜  # 晝 (daytime) misread as 畫 (stroke) in the 晝夜 binome
+蓍目 -> 蓍    # spurious 目 inserted after 蓍 (milfoil stalk) in 蓍之變
+
+# --- I Ching & Cheng-Zhu Specific Corrections ---
+太義 -> 本義
+木義 -> 本義
+吉則台 -> 吉則凶
+夜勝畫 -> 夜勝晝
+夜勝書 -> 夜勝晝
+一箇言 -> 一箇吉
+李義 -> 本義  # 本 misread as 李 in the boxed "Original Meaning" marker (verified p.111 vs iching_cn_192.pdf)
+
+# --- I Ching 192-page scan, pass 2 (scholar names + complex classical glyphs; all verified vs iching_cn_192.pdf) ---
+林氏良為非 -> 禁民為非  # p.12: 禁民 misread as 林氏良 (繫辭 "理財正辭禁民為非曰義"); NOTE non-equal-length (5->4), shifts heatmap on this page
+案氏中行 -> 柴氏中行      # p.7: scholar 柴中行 — 柴 misread as 案
+平卷項氏 -> 平菴項氏      # p.17: 項安世 styled 平菴 — 菴 misread as 卷
+節齋黎氏 -> 節齋蔡氏      # p.17: 節齋蔡淵 — 蔡 misread as 黎 (cf. known term 節齋蔡氏曰)
+炎木為矢 -> 剡木為矢      # p.24: 剡 misread as 炎 (繫辭 "弦木為弧剡木為矢"; OCR dropped the 刂 radical)
+轂杅以警 -> 擊柝以警      # p.24: 擊柝 misread as 轂杅 (繫辭 "重門擊柝" / "擊柝以警之")

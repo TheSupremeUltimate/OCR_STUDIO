@@ -38,24 +38,26 @@ class TestInteractiveSuite(unittest.TestCase):
         )
         self.assertTrue(len(result) > 0)
 
+    @patch("backend.main.resolve_within_base")
     @patch("backend.main.job_manager.get_job")
     @patch("backend.main.load_settings")
     @patch("backend.main.get_upload_dir")
     @patch("backend.main.process_cropped_zone")
-    def test_reprocess_zone_endpoint(self, mock_process_zone, mock_upload_dir, mock_settings, mock_get_job):
+    def test_reprocess_zone_endpoint(self, mock_process_zone, mock_upload_dir, mock_settings, mock_get_job, mock_resolve):
         # Setup mocks
         mock_job = MagicMock()
         mock_job.pdf_filename = "dummy.pdf"
         mock_job.page_confidence = {}
         mock_job.page_token_logprobs = {}
         mock_get_job.return_value = mock_job
-        
+
         mock_settings.return_value = {}
-        
-        # Mock upload path
+
+        # Mock upload path + containment guard (validated path with exists() True)
         mock_path = MagicMock()
         mock_path.exists.return_value = True
         mock_upload_dir.return_value = mock_path
+        mock_resolve.return_value = mock_path
         
         # Mock process_cropped_zone return
         mock_page_result = PageResult(
@@ -97,19 +99,21 @@ class TestInteractiveSuite(unittest.TestCase):
         self.assertEqual(mock_job.page_token_logprobs["1"][0]["token"], "cropped")
 
     @patch("backend.main.get_output_dir")
-    def test_save_edited_file_endpoint(self, mock_output_dir):
-        # Mock output path
-        mock_path = MagicMock()
-        mock_path.exists.return_value = True
-        mock_path.parent.exists.return_value = True
-        mock_output_dir.return_value = mock_path
-        
-        # Mock file write
+    @patch("backend.main.resolve_within_base")
+    def test_save_edited_file_endpoint(self, mock_resolve, mock_output_dir):
+        # The path-containment helper is exercised directly in test_security.py;
+        # here we mock it to a deterministic path and assert the write contract.
+        # get_output_dir is mocked so it never reads the real settings.json.
+        mock_output_dir.return_value = MagicMock()
+        fake_path = MagicMock()
+        fake_path.parent.exists.return_value = True
+        mock_resolve.return_value = fake_path
+
         with patch("builtins.open", unittest.mock.mock_open()) as mock_file:
             response = self.client.put(
                 "/api/download/dummy_FULL.md",
                 json={"content": "edited content"}
             )
             self.assertEqual(response.status_code, 200)
-            mock_file.assert_called_once_with(mock_path / "dummy_FULL.md", "w", encoding="utf-8")
+            mock_file.assert_called_once_with(fake_path, "w", encoding="utf-8")
             mock_file().write.assert_called_once_with("edited content")
