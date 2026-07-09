@@ -4,6 +4,16 @@
 
 All inference runs against a local **OpenAI‑compatible** server (e.g. [LM Studio](https://lmstudio.ai/)). There are no cloud calls, no telemetry, and no analytics.
 
+## Screenshots
+
+| **0. Dashboard** | **1. Processing OCR PDF** | **2. Processed Completed** |
+| :---: | :---: | :---: |
+| <img src="images/00-Dashboard.png" width="220" alt="Dashboard"> | <img src="images/01-Processing-OCR-PDF.png" width="220" alt="Processing OCR PDF"> | <img src="images/02-Processed-Completed.png" width="220" alt="Processed Completed"> |
+| **3. Translation to English Completed** | **4. Translated English** | **5. Settings 1** |
+| <img src="images/03-Translation_to_English_Completed.png" width="220" alt="Translation to English Completed"> | <img src="images/04-Translated_English.png" width="220" alt="Translated English"> | <img src="images/05-Setting_1.png" width="220" alt="Settings 1"> |
+| **6. Settings 2** | | |
+| <img src="images/06-Settings_2.png" width="220" alt="Settings 2"> | | |
+
 ---
 
 ## Key Features
