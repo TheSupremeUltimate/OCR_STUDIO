@@ -13,6 +13,8 @@ import time
 import sys
 import subprocess
 import uuid
+import asyncio
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
@@ -89,6 +91,9 @@ app.add_middleware(
 
 # Global instances
 job_manager = JobManager()
+
+# Global translation cache to survive transient LM Studio errors and permit resumption
+GLOBAL_TRANSLATION_CACHE: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -748,18 +753,14 @@ async def translate_document(req: TranslateRequest, request: Request):
 
     completion_url = f"{server_url.rstrip('/')}/chat/completions"
     system_prompt = (
-        "You are an expert translator specializing in translating Classical Chinese philosophical, historical, and archival texts into natural English. "
-        "Translate the provided Classical Chinese text into clear, academic English.\n\n"
+        "You are an expert, academic translator. "
+        "Detect the language of the provided source text and translate it into clear, natural English.\n\n"
         "Rules:\n"
         "1. Return ONLY the English translation of the text you are given.\n"
-        "2. Do NOT add explanations, prefaces, page numbers, headers, HTML comments, or original Chinese characters.\n"
+        "2. Do NOT add explanations, prefaces, conversational filler, page numbers, headers, HTML comments, or characters from the source language.\n"
         "3. Do NOT repeat yourself: translate the given text exactly once and then stop.\n"
-        "4. Preserve paragraph and line breaks.\n\n"
-        "Examples:\n"
-        "Input: 剛柔者立本者也變通者趣時者也\n"
-        "Output: Hardness and softness are the established foundation; change and continuity are the adaptation to time.\n\n"
-        "Input: 吉凶者貞勝者也\n"
-        "Output: Good fortune and misfortune are determined by perseverance."
+        "4. Preserve paragraph and line breaks exactly as they appear in the source.\n"
+        "5. If the source text is already in English, return it unchanged."
     )
 
     # Structure-preserving unit split: one unit per page when markers exist,
@@ -782,12 +783,22 @@ async def translate_document(req: TranslateRequest, request: Request):
 
         async def translate_content(client, content: str) -> str:
             """Translate one marker-free content string (sub-chunking if large),
-            memoized on the stripped content. Raises _TranslateError on failure."""
+            memoized on the stripped content and saved to the global cache.
+            Raises _TranslateError on failure."""
             stripped = content.strip()
             if not stripped:
                 return ""
             if stripped in cache:
                 return cache[stripped]
+
+            # Global cache lookup (incorporating model and prompt settings to prevent incorrect reuse)
+            cache_input = f"{model}:{system_prompt}:{stripped}"
+            cache_key = hashlib.sha256(cache_input.encode("utf-8")).hexdigest()
+            if cache_key in GLOBAL_TRANSLATION_CACHE:
+                logger.info("Translation cache hit for key %s (model=%s)", cache_key[:10], model)
+                result = GLOBAL_TRANSLATION_CACHE[cache_key]
+                cache[stripped] = result
+                return result
 
             sub_parts = _chunk_by_delimiters(stripped, 6000) if len(stripped) > 6000 else [stripped]
             out_parts: list[str] = []
@@ -799,38 +810,76 @@ async def translate_document(req: TranslateRequest, request: Request):
                         {"role": "user", "content": f"Please translate this content now:\n\n{part}"}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 8000,
+                    "max_tokens": 4000,  # Cap at 4000 to prevent LM Studio KV-cache OOM crashes
                     # Suppress the repetition/degeneration loops seen on repetitive
                     # classical text — defense-in-depth alongside marker isolation.
                     "frequency_penalty": 0.3,
                     "presence_penalty": 0.3,
                 }
-                res = await client.post(completion_url, json=payload)
-                if res.status_code != 200:
-                    logger.error("LM Studio translation endpoint returned error status: %d - %s", res.status_code, res.text)
+                
+                max_retries = 3
+                retry_delay = 3.0
+                last_error = ""
+                success = False
+                
+                for attempt in range(max_retries):
                     try:
-                        error_json = res.json()
-                        if "error" in error_json and "message" in error_json["error"]:
-                            detail = f"LM Studio: {error_json['error']['message']}"
+                        res = await client.post(completion_url, json=payload)
+                        if res.status_code == 200:
+                            data = res.json()
+                            message = data["choices"][0]["message"]
+                            translated = _strip_reasoning(message.get("content") or "")
+                            # Scrub any page marker the model leaked into its output, so the
+                            # only markers in the final document are the ones we reassemble.
+                            translated = _PAGE_MARKER_RE.sub("", translated).strip()
+                            
+                            # Check if the model ran out of tokens (e.g. reasoning starved the budget)
+                            finish_reason = data["choices"][0].get("finish_reason")
+                            if finish_reason == "length":
+                                old_limit = payload["max_tokens"]
+                                new_limit = min(old_limit * 2, 12000)
+                                if new_limit > old_limit:
+                                    logger.warning(
+                                        "Attempt %d/%d: Translation cut off or starved by reasoning (max_tokens=%d). Retrying with larger budget (max_tokens=%d)...",
+                                        attempt + 1, max_retries, old_limit, new_limit
+                                    )
+                                    payload["max_tokens"] = new_limit
+                                    raise _TranslateError("Translation cut off due to token limit.")
+                            
+                            if not translated:
+                                raise _TranslateError("Translation model returned no content.")
+                                
+                            out_parts.append(translated)
+                            success = True
+                            break
                         else:
-                            detail = f"LM Studio error: {res.text}"
-                    except Exception:
-                        detail = f"LM Studio returned status {res.status_code}: {res.text}"
-                    raise _TranslateError(detail)
-
-                data = res.json()
-                message = data["choices"][0]["message"]
-                translated = _strip_reasoning(message.get("content") or "")
-                # Scrub any page marker the model leaked into its output, so the
-                # only markers in the final document are the ones we reassemble.
-                translated = _PAGE_MARKER_RE.sub("", translated).strip()
-                if not translated:
-                    logger.error("Translation returned no content after stripping reasoning (model=%s).", model)
-                    raise _TranslateError("Translation model returned no content.")
-                out_parts.append(translated)
+                            logger.error("LM Studio translation endpoint returned error status: %d - %s", res.status_code, res.text)
+                            try:
+                                error_json = res.json()
+                                if "error" in error_json and "message" in error_json["error"]:
+                                    last_error = f"LM Studio: {error_json['error']['message']}"
+                                else:
+                                    last_error = f"LM Studio error: {res.text}"
+                            except Exception:
+                                last_error = f"LM Studio returned status {res.status_code}: {res.text}"
+                    except httpx.HTTPError as e:
+                        last_error = f"HTTP connection error: {str(e)}"
+                        logger.warning("Attempt %d/%d failed with connection error: %s", attempt + 1, max_retries, e)
+                    except _TranslateError as e:
+                        last_error = str(e)
+                        logger.warning("Attempt %d/%d failed: %s", attempt + 1, max_retries, e)
+                    
+                    if attempt < max_retries - 1:
+                        logger.info("Retrying translation chunk in %.1f seconds...", retry_delay)
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2.0
+                
+                if not success:
+                    raise _TranslateError(last_error or "Translation failed after multiple retries.")
 
             result = "\n\n".join(out_parts)
             cache[stripped] = result
+            GLOBAL_TRANSLATION_CACHE[cache_key] = result
             return result
 
         total = len(units)
