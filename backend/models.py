@@ -48,6 +48,7 @@ class SettingsUpdateRequest(BaseModel):
     server_url: Optional[str] = None
     model: Optional[str] = None
     translation_model: Optional[str] = None
+    translation_profile: Optional[str] = None
     workers: Optional[int] = Field(None, ge=1, le=8)
     pages_per_group: Optional[int] = Field(None, ge=1, le=50)
     target_longest_image_dim: Optional[int] = Field(None, ge=256, le=4096)
@@ -117,6 +118,7 @@ class SettingsResponse(BaseModel):
     server_url: str
     model: str
     translation_model: Optional[str] = None
+    translation_profile: str = "universal"
     workers: int
     pages_per_group: int
     target_longest_image_dim: int

@@ -183,3 +183,12 @@ export async function getGlossary(name) {
   return handleResponse(res);
 }
 
+/**
+ * Fetch available system prompts (translation profiles) from backend
+ * GET /api/system_prompts
+ */
+export async function getSystemPrompts() {
+  const res = await fetch(`${BASE_URL}/system_prompts`);
+  return handleResponse(res);
+}
+

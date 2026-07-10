@@ -3,7 +3,7 @@
  * Handles view routing, state management, event listeners, and WebSocket notifications.
  */
 
-import * as api from './api.js';
+import * as api from './api.js?v=20260710.1';
 import { connectWs } from './websocket.js';
 
 // Application State
@@ -243,6 +243,23 @@ async function loadSettings() {
     DOM.inputFilterDespeckle.checked = !!appSettings.despeckle;
     DOM.inputConsensusMode.checked = !!appSettings.consensus_mode;
 
+    const selectTranslationProfile = document.getElementById('select-translation-profile');
+    if (selectTranslationProfile) {
+      try {
+        const profiles = await api.getSystemPrompts();
+        selectTranslationProfile.innerHTML = '';
+        profiles.forEach((p) => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name;
+          selectTranslationProfile.appendChild(opt);
+        });
+        selectTranslationProfile.value = appSettings.translation_profile || 'universal';
+      } catch (err) {
+        console.error('Failed to load system prompts:', err);
+      }
+    }
+
     // Dynamically populate model dropdown
     await populateModelsDropdown(appSettings.model, appSettings.translation_model);
 
@@ -283,6 +300,7 @@ async function saveSettings(e) {
     server_url: DOM.inputServer.value.trim(),
     model: DOM.selectModel.value ? DOM.selectModel.value.trim() : '',
     translation_model: document.getElementById('select-translation-model')?.value ? document.getElementById('select-translation-model').value.trim() : '',
+    translation_profile: document.getElementById('select-translation-profile')?.value || 'universal',
     workers: parseInt(DOM.inputWorkers.value, 10),
     pages_per_group: parseInt(DOM.inputPagesGroup.value, 10),
     max_tokens: parseInt(DOM.inputMaxTokens.value, 10),

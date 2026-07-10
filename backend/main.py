@@ -216,6 +216,24 @@ async def get_glossary_preset(name: str):
     return {"name": name, "terms": terms, "raw": raw}
 
 
+@app.get("/api/system_prompts")
+async def list_system_prompts():
+    """List available system prompt files from the system_prompts/ directory.
+    Strips the .md extension and formats for clean display name (e.g. 'CMC System Prompt').
+    """
+    prompts_dir = PROJECT_ROOT / "system_prompts"
+    results = [{"id": "universal", "name": "Universal (Auto-Detect)"}]
+    if prompts_dir.exists() and prompts_dir.is_dir():
+        for path in sorted(prompts_dir.glob("*.md")):
+            # Extract display name: replace underscores with spaces, strip .md
+            display_name = path.stem.replace("_", " ")
+            results.append({
+                "id": path.name,
+                "name": display_name
+            })
+    return results
+
+
 @app.post("/api/logs/open")
 async def open_logs():
     """Open the application log file in the default OS editor."""
@@ -684,6 +702,41 @@ def _chunk_by_delimiters(text: str, max_chars: int) -> list[str]:
     return [c.rstrip("\n") for c in chunks if c.strip()]
 
 
+_UNIVERSAL_TRANSLATION_PROMPT = (
+    "You are an expert, academic translator. "
+    "Detect the language of the provided source text and translate it into clear, natural English.\n\n"
+    "Rules:\n"
+    "1. Return ONLY the English translation of the text you are given.\n"
+    "2. Do NOT add explanations, prefaces, conversational filler, page numbers, headers, HTML comments, or characters from the source language.\n"
+    "3. Do NOT repeat yourself: translate the given text exactly once and then stop.\n"
+    "4. Preserve paragraph and line breaks exactly as they appear in the source.\n"
+    "5. If the source text is already in English, return it unchanged."
+)
+
+# Persona translation profiles are loaded dynamically from the system_prompts/ folder.
+# They are read per request so edits take effect without a restart. If a file is
+# absent or resolves invalidly, the universal auto-detect prompt is used as fallback.
+def _load_translation_system_prompt(profile: str) -> str:
+    """Return the system prompt for the requested translation profile.
+
+    If the profile is "universal" or empty/None, the universal auto-detect prompt is used.
+    Otherwise, we treat the profile as a filename in the system_prompts/ directory
+    and read it securely.
+    """
+    if not profile or profile == "universal":
+        return _UNIVERSAL_TRANSLATION_PROMPT
+
+    prompts_dir = PROJECT_ROOT / "system_prompts"
+    try:
+        path = resolve_within_base(prompts_dir, profile)
+        if path.exists() and path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except (ValueError, OSError) as e:
+        logger.warning("Failed to load translation profile %r: %s", profile, e)
+
+    return _UNIVERSAL_TRANSLATION_PROMPT
+
+
 class _TranslateError(Exception):
     """Raised inside the translation stream to surface a specific error detail."""
 
@@ -752,16 +805,7 @@ async def translate_document(req: TranslateRequest, request: Request):
         model = settings.get("model", "")
 
     completion_url = f"{server_url.rstrip('/')}/chat/completions"
-    system_prompt = (
-        "You are an expert, academic translator. "
-        "Detect the language of the provided source text and translate it into clear, natural English.\n\n"
-        "Rules:\n"
-        "1. Return ONLY the English translation of the text you are given.\n"
-        "2. Do NOT add explanations, prefaces, conversational filler, page numbers, headers, HTML comments, or characters from the source language.\n"
-        "3. Do NOT repeat yourself: translate the given text exactly once and then stop.\n"
-        "4. Preserve paragraph and line breaks exactly as they appear in the source.\n"
-        "5. If the source text is already in English, return it unchanged."
-    )
+    system_prompt = _load_translation_system_prompt(settings.get("translation_profile", "universal"))
 
     # Structure-preserving unit split: one unit per page when markers exist,
     # otherwise size-based chunks (no markers to loop on).
