@@ -81,7 +81,7 @@ All inference runs against a local **OpenAI‑compatible** server (e.g. [LM Stud
   * **Universal (Auto‑Detect)** — a general academic translator that detects the source language and renders it in clear, natural English. Supports any source language (e.g., translating German OCR results to English).
 
   * **Tai Chi: Cheng Man-Ching Lineage** (shipped by default) — a specialized translation persona reflecting Professor Cheng Man-Ching's deeply Daoist, soft, and philosophical approach. It emphasizes complete relaxation (sōng), yielding ("investing in loss"), and intent/Qi over muscular force. The prompt lives in `system_prompts/CMC_System_Prompt.md`.
-  * Persona files ship from the root‑level `system_prompts/` directory (not `docs/`, which is excluded from the production Clean Room build) — see `docs/clean_room/clean_room_config.py`.
+  * Persona files ship from the root‑level `system_prompts/` directory.
 
 ### Export & telemetry
 
@@ -173,9 +173,9 @@ The backend and the inference server may run on the **same machine or two machin
    * **Linux (Debian/Ubuntu):** `sudo apt-get install poppler-utils`
 
 3. **An OpenAI‑compatible inference server** (e.g. [LM Studio](https://lmstudio.ai/)):
-   * Load a **vision** model for OCR — e.g. `allenai/olmOCR-2-7B-1025` (a Qwen2.5‑VL‑7B fine‑tune) or another vision‑capable model.
+   * Load a **vision** model for OCR — e.g. `allenai/olmOCR-2-7B-1025` (a Qwen2.5‑VL‑7B fine‑tune) or another vision‑capable model (GGUF: [bartowski/allenai_olmOCR-2-7B-1025-GGUF](https://huggingface.co/bartowski/allenai_olmOCR-2-7B-1025-GGUF), which has been used with great success in this pipeline).
 
-   * *(Optional)* load a separate **text** model for translation — e.g. a Qwen3 instruct/reasoning model.
+   * *(Optional)* load a separate **text** model for translation — e.g. a Qwen3 instruct/reasoning model or [unsloth/Qwen3.6-35B-A3B-GGUF](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) (also used with great success).
 
    * Start the server (LM Studio defaults to `http://localhost:1234`).
 
